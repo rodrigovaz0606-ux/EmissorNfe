@@ -13,7 +13,7 @@ NF-e modelo 55 emitida direto na SEFAZ, com Node. Usa a mesma stack do CampoCert
    npm install
    npm run cert     # abre o .pfx e mostra titular/validade (não usa a rede)
    npm run status   # consulta NFeStatusServico4 na SEFAZ-GO (homologação)
-   npm run gerar    # gera o XML do cenário de exemplo (venda de soja) em saida/
+   npm run gerar    # gera, assina e valida o XML do cenário de exemplo (venda de soja) em saida/
    npm run validar -- saida/<arquivo>.xml   # valida no XSD
    npm test
    ```
@@ -23,6 +23,6 @@ Resposta esperada do `status`: `cStat 107: Servico em Operacao`.
 ## Roteiro
 
 - [x] Fase 1: leitura do certificado A1, cliente SOAP com TLS mútuo, status do serviço
-- [ ] Fase 2: ~~chave de acesso~~ ✔, ~~XML da NF-e 4.00~~ ✔, ~~validação XSD~~ ✔, assinatura XMLDSig
+- [x] Fase 2: chave de acesso, XML da NF-e 4.00, validação XSD, assinatura XMLDSig
 - [ ] Fase 3: autorização (NFeAutorizacao4), `nfeProc`, SQLite
 - [ ] Fase 4: cancelamento, CC-e, inutilização, DANFE, telas em React
