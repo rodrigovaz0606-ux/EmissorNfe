@@ -17,6 +17,9 @@ const WEBSERVICES_HOMOLOGACAO = {
     NFeStatusServico4: 'https://homolog.sefaz.go.gov.br/nfe/services/NFeStatusServico4',
     NFeAutorizacao4: 'https://homolog.sefaz.go.gov.br/nfe/services/NFeAutorizacao4',
     NFeRetAutorizacao4: 'https://homolog.sefaz.go.gov.br/nfe/services/NFeRetAutorizacao4',
+    NFeConsultaProtocolo4: 'https://homolog.sefaz.go.gov.br/nfe/services/NFeConsultaProtocolo4',
+    NFeRecepcaoEvento4: 'https://homolog.sefaz.go.gov.br/nfe/services/NFeRecepcaoEvento4',
+    NFeInutilizacao4: 'https://homolog.sefaz.go.gov.br/nfe/services/NFeInutilizacao4',
   },
 };
 

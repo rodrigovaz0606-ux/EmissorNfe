@@ -15,7 +15,8 @@
     "dev:server": "node --watch server/index.js",
     "dev:web": "vite",
     "build": "vite build",
-    "start": "node server/index.js"
+    "start": "node server/index.js",
+    "consultar": "node scripts/consultar.js"
   },
   "dependencies": {
     "@xmldom/xmldom": "^0.9.12",

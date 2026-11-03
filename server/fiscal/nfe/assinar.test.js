@@ -1,27 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import crypto from 'node:crypto';
-import forge from 'node-forge';
+import { certificadoDeTeste } from '../certificadoTeste.js';
 import { assinarNFe, verificarAssinatura } from './assinar.js';
 import { gerarXmlNFe } from './gerarXml.js';
 import { validarXsd } from './validarXsd.js';
 import { vendaSoja } from '../../../exemplos/venda-soja.js';
-
-// Certificado autoassinado só para teste (não depende do .pfx real).
-function certificadoDeTeste() {
-  const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
-  const keyPem = privateKey.export({ type: 'pkcs8', format: 'pem' });
-  const cert = forge.pki.createCertificate();
-  cert.publicKey = forge.pki.publicKeyFromPem(publicKey.export({ type: 'spki', format: 'pem' }));
-  cert.serialNumber = '01';
-  cert.validity.notBefore = new Date();
-  cert.validity.notAfter = new Date(Date.now() + 86_400_000);
-  const attrs = [{ name: 'commonName', value: 'PRODUTOR TESTE:52998224725' }];
-  cert.setSubject(attrs);
-  cert.setIssuer(attrs);
-  cert.sign(forge.pki.privateKeyFromPem(keyPem), forge.md.sha256.create());
-  return { keyPem, certPem: forge.pki.certificateToPem(cert), cadeiaPem: [] };
-}
 
 const certificado = certificadoDeTeste();
 const { xml, chave } = gerarXmlNFe(
