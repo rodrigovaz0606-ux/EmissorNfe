@@ -15,6 +15,8 @@ export const CODIGOS_UF = {
 const WEBSERVICES_HOMOLOGACAO = {
   GO: {
     NFeStatusServico4: 'https://homolog.sefaz.go.gov.br/nfe/services/NFeStatusServico4',
+    NFeAutorizacao4: 'https://homolog.sefaz.go.gov.br/nfe/services/NFeAutorizacao4',
+    NFeRetAutorizacao4: 'https://homolog.sefaz.go.gov.br/nfe/services/NFeRetAutorizacao4',
   },
 };
 

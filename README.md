@@ -15,6 +15,7 @@ NF-e modelo 55 emitida direto na SEFAZ, com Node. Usa a mesma stack do CampoCert
    npm run status   # consulta NFeStatusServico4 na SEFAZ-GO (homologação)
    npm run gerar    # gera, assina e valida o XML do cenário de exemplo (venda de soja) em saida/
    npm run validar -- saida/<arquivo>.xml   # valida no XSD
+   npm run enviar   # gera, assina, valida e envia para autorização (homologação)
    npm test
    ```
 

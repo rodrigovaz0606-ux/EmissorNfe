@@ -9,7 +9,8 @@
     "cert": "node scripts/cert-info.js",
     "test": "node --test server/",
     "gerar": "node scripts/gerar.js",
-    "validar": "node scripts/validar.js"
+    "validar": "node scripts/validar.js",
+    "enviar": "node scripts/enviar.js"
   },
   "dependencies": {
     "@xmldom/xmldom": "^0.9.12",
