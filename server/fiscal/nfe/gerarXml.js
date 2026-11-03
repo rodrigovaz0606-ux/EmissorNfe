@@ -119,14 +119,15 @@ function blocoDest(dest, config) {
   );
 }
 
-function blocoICMS(item, vProdC) {
+// baseICMS: valor do produto − desconto + frete + seguro + outras despesas.
+function blocoICMS(item, baseICMS) {
   const { orig = 0, CST } = item.icms ?? {};
   const cst = String(CST ?? '').padStart(2, '0');
   switch (cst) {
     case '00': {
       const pICMS = Number(item.icms.pICMS);
       exigir(Number.isFinite(pICMS), `Item ${item.nItem}: ICMS 00 exige pICMS.`);
-      const vBC = vProdC; // base = valor do produto (sem frete/desconto nesta versão)
+      const vBC = baseICMS;
       const vICMS = Math.round((vBC * pICMS) / 100);
       return {
         xml: grupo('ICMS', grupo('ICMS00', tag('orig', orig), tag('CST', '00'), tag('modBC', item.icms.modBC ?? 3),
@@ -144,16 +145,17 @@ function blocoICMS(item, vProdC) {
 }
 
 // PIS e COFINS têm a mesma estrutura; muda só o nome do grupo e das tags.
-function blocoPisCofins(nome, dados, vProdC, nItem) {
+// base: valor do produto − desconto.
+function blocoPisCofins(nome, dados, base, nItem) {
   const cst = String(dados?.CST ?? '').padStart(2, '0');
   const p = nome === 'PIS' ? 'pPIS' : 'pCOFINS';
   const v = nome === 'PIS' ? 'vPIS' : 'vCOFINS';
   if (cst === '01' || cst === '02') {
     const aliq = Number(dados[p]);
     exigir(Number.isFinite(aliq), `Item ${nItem}: ${nome} CST ${cst} exige ${p}.`);
-    const valor = Math.round((vProdC * aliq) / 100);
+    const valor = Math.round((base * aliq) / 100);
     return {
-      xml: grupo(nome, grupo(`${nome}Aliq`, tag('CST', cst), tag('vBC', centavos(vProdC)), tag(p, decimal(aliq, 4)), tag(v, centavos(valor)))),
+      xml: grupo(nome, grupo(`${nome}Aliq`, tag('CST', cst), tag('vBC', centavos(base)), tag(p, decimal(aliq, 4)), tag(v, centavos(valor)))),
       valor,
     };
   }
@@ -202,9 +204,12 @@ function blocoDet(item, nItem) {
     tag('indTot', 1),
   );
 
-  const icms = blocoICMS(it, vProdC);
-  const pis = blocoPisCofins('PIS', it.pis, vProdC, nItem);
-  const cofins = blocoPisCofins('COFINS', it.cofins, vProdC, nItem);
+  exigir(vDescC <= vProdC, `Item ${nItem}: desconto maior que o valor do produto.`);
+  const baseICMS = vProdC - vDescC + vFreteC + vSegC + vOutroC;
+  const basePisCofins = vProdC - vDescC;
+  const icms = blocoICMS(it, baseICMS);
+  const pis = blocoPisCofins('PIS', it.pis, basePisCofins, nItem);
+  const cofins = blocoPisCofins('COFINS', it.cofins, basePisCofins, nItem);
 
   const xml =
     `<det nItem="${nItem}">` +

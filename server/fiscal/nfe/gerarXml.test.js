@@ -99,3 +99,21 @@ test('formatos', () => {
   assert.ok(cnpjValido('12.345.678/0001-95'));
   assert.ok(!cnpjValido('12.345.678/0001-96'));
 });
+
+test('bases: ICMS = produto − desconto + frete; PIS/COFINS = produto − desconto', () => {
+  const d = cenario();
+  d.itens = [{
+    ...d.itens[0], qCom: 200, vUnCom: 58.4, vDesc: 120, vFrete: 50,
+    icms: { CST: '00', pICMS: 12 }, pis: { CST: '01', pPIS: 1.65 }, cofins: { CST: '01', pCOFINS: 7.6 },
+  }];
+  const { xml, vNF } = gerarXmlNFe(d, config);
+  const icms = xml.match(/<ICMS00>.*<\/ICMS00>/)[0];
+  assert.equal(pegar(icms, 'vBC'), '11610.00'); // 11.680 − 120 + 50
+  assert.equal(pegar(icms, 'vICMS'), '1393.20');
+  assert.equal(pegar(xml.match(/<PISAliq>.*<\/PISAliq>/)[0], 'vBC'), '11560.00'); // 11.680 − 120
+  assert.equal(pegar(xml.match(/<PISAliq>.*<\/PISAliq>/)[0], 'vPIS'), '190.74');
+  assert.equal(pegar(xml.match(/<COFINSAliq>.*<\/COFINSAliq>/)[0], 'vCOFINS'), '878.56');
+  assert.equal(vNF, '11610.00');
+  d.itens[0].vDesc = 99999;
+  assert.throws(() => gerarXmlNFe(d, config), /desconto maior/);
+});

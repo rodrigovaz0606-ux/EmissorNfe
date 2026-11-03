@@ -6,3 +6,4 @@ certs/
 *.pem
 data/
 saida/
+dist/
