@@ -1,9 +1,9 @@
-node_modules/
-.env
-certs/
-*.pfx
 *.p12
 *.pem
+*.pfx
+.env
+certs/
 data/
-saida/
 dist/
+node_modules/
+saida/
