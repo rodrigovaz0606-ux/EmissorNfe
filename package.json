@@ -1,0 +1,17 @@
+{
+  "name": "emissor-nfe",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Emissor de NF-e modelo 55 direto na SEFAZ (Node). Fase 1: comunicação e status do serviço.",
+  "scripts": {
+    "status": "node scripts/status.js",
+    "cert": "node scripts/cert-info.js",
+    "test": "node --test server/"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "fast-xml-parser": "^5.10.1",
+    "node-forge": "^1.3.1"
+  }
+}
