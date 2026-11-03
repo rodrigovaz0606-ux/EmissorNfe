@@ -117,3 +117,13 @@ test('bases: ICMS = produto − desconto + frete; PIS/COFINS = produto − desco
   d.itens[0].vDesc = 99999;
   assert.throws(() => gerarXmlNFe(d, config), /desconto maior/);
 });
+
+test('CEP do emitente é obrigatório (no destinatário é opcional)', async () => {
+  const d = cenario();
+  delete d.dest.ender.CEP;
+  const { xml } = gerarXmlNFe(d, config);
+  assert.equal((await validarXsd(xml)).erros.length, 1); // só a falta da assinatura
+  const d2 = cenario();
+  delete d2.emit.ender.CEP;
+  assert.throws(() => gerarXmlNFe(d2, config), /CEP do emitente/);
+});

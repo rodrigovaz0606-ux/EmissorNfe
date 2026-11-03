@@ -103,6 +103,7 @@ export function pendencias(nota) {
 
   falta(nota.emit.xNome.trim(), 'Emitente: nome');
   falta(digitos(nota.emit.IE), 'Emitente: inscrição estadual');
+  falta(digitos(nota.emit.ender.CEP).length === 8, 'Emitente: CEP');
   end(nota.emit.ender, 'Emitente');
 
   const d = nota.dest;

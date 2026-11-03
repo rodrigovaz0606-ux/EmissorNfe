@@ -28,7 +28,7 @@ export function Emitente({ nota, set, certificado, onSalvarPadrao, salvo }) {
         <Selecao rotulo="Regime tributário" valor={e.CRT} onChange={s('CRT')} opcoes={CRT} largura="m" />
       </div>
       <h3 className="subtitulo">Endereço</h3>
-      <Endereco valor={e.ender} onChange={(v) => set(['emit', 'ender'], v)} />
+      <Endereco valor={e.ender} onChange={(v) => set(['emit', 'ender'], v)} cepObrigatorio />
     </Secao>
   );
 }

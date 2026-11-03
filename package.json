@@ -16,7 +16,8 @@
     "dev:web": "vite",
     "build": "vite build",
     "start": "node server/index.js",
-    "consultar": "node scripts/consultar.js"
+    "consultar": "node scripts/consultar.js",
+    "e2e": "vite build && node e2e/interface.test.js"
   },
   "dependencies": {
     "@xmldom/xmldom": "^0.9.12",
@@ -34,6 +35,7 @@
   "devDependencies": {
     "@vitejs/plugin-react": "^4.7.0",
     "concurrently": "^8.2.2",
+    "playwright-core": "^1.49.1",
     "vite": "^6.4.5"
   }
 }

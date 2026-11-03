@@ -4,7 +4,7 @@ import { UFS } from '../opcoes.js';
 import { buscarCep } from '../api.js';
 import { digitos } from '../modelo.js';
 
-export function Endereco({ valor, onChange }) {
+export function Endereco({ valor, onChange, cepObrigatorio }) {
   const [buscando, setBuscando] = React.useState(false);
   const [erroCep, setErroCep] = React.useState('');
   const set = (campo) => (v) => onChange({ ...valor, [campo]: v });
@@ -27,6 +27,7 @@ export function Endereco({ valor, onChange }) {
       <div className="cep-grupo l-p">
         <Campo
           rotulo="CEP" valor={valor.CEP} onChange={set('CEP')} largura="cheia" inputMode="numeric" placeholder="00000-000"
+          obrigatorio={cepObrigatorio} erro={cepObrigatorio && digitos(valor.CEP).length !== 8 && 'Informe o CEP'}
           onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), consultarCep())}
         />
         <button type="button" className="btn-mini" onClick={consultarCep} disabled={buscando || digitos(valor.CEP).length !== 8}>

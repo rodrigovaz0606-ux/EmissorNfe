@@ -17,42 +17,48 @@ export function Secao({ id, numero, titulo, descricao, acoes, children }) {
 }
 
 // Campo de texto. `erro` aparece só depois que o usuário mexeu no campo.
-export function Campo({ rotulo, valor, onChange, erro, dica, largura = 'm', obrigatorio, lista, ...resto }) {
+// O <label> contém só o nome do campo; dica e erro ficam ligados por aria-describedby.
+export function Campo({ rotulo, valor, onChange, onBlur, erro, dica, largura = 'm', obrigatorio, lista, ...resto }) {
   const [tocado, setTocado] = React.useState(false);
   const mostrarErro = erro && tocado;
   const id = React.useId();
+  const idAjuda = `${id}-ajuda`;
+  const ajuda = mostrarErro ? erro : dica;
   return (
-    <label className={`campo l-${largura} ${mostrarErro ? 'com-erro' : ''}`} htmlFor={id}>
-      <span className="rotulo">
+    <div className={`campo l-${largura} ${mostrarErro ? 'com-erro' : ''}`}>
+      <label className="rotulo" htmlFor={id}>
         {rotulo}
-        {obrigatorio && <i className="obrigatorio" title="Obrigatório">*</i>}
-      </span>
+        {obrigatorio && <i className="obrigatorio" aria-hidden="true">*</i>}
+      </label>
       <input
         id={id}
         value={valor ?? ''}
         onChange={(e) => onChange(e.target.value)}
-        onBlur={() => setTocado(true)}
+        onBlur={(e) => { setTocado(true); onBlur?.(e); }}
         list={lista}
+        required={obrigatorio}
+        aria-invalid={mostrarErro ? true : undefined}
+        aria-describedby={ajuda ? idAjuda : undefined}
         {...resto}
       />
-      {mostrarErro ? <span className="msg-erro">{erro}</span> : dica && <span className="dica">{dica}</span>}
-    </label>
+      {ajuda && <span id={idAjuda} className={mostrarErro ? 'msg-erro' : 'dica'}>{ajuda}</span>}
+    </div>
   );
 }
 
 export function Selecao({ rotulo, valor, onChange, opcoes, largura = 'm', dica }) {
   const id = React.useId();
   return (
-    <label className={`campo l-${largura}`} htmlFor={id}>
-      <span className="rotulo">{rotulo}</span>
-      <select id={id} value={valor} onChange={(e) => onChange(e.target.value)}>
+    <div className={`campo l-${largura}`}>
+      <label className="rotulo" htmlFor={id}>{rotulo}</label>
+      <select id={id} value={valor} onChange={(e) => onChange(e.target.value)} aria-describedby={dica ? `${id}-ajuda` : undefined}>
         {opcoes.map((o) => {
           const [v, t] = Array.isArray(o) ? o : [o, o];
           return <option key={v} value={v}>{t}</option>;
         })}
       </select>
-      {dica && <span className="dica">{dica}</span>}
-    </label>
+      {dica && <span id={`${id}-ajuda`} className="dica">{dica}</span>}
+    </div>
   );
 }
 

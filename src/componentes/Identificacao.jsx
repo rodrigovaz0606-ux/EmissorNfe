@@ -3,7 +3,7 @@ import { Secao, Campo, Selecao } from './campos.jsx';
 import { NATUREZAS, TP_NF, FIN_NFE, IND_FINAL, IND_PRES } from '../opcoes.js';
 import { idDestDe } from '../modelo.js';
 
-export function Identificacao({ nota, set }) {
+export function Identificacao({ nota, set, onSerie }) {
   const ide = nota.ide;
   const s = (campo) => (v) => set(['ide', campo], v);
   const idDest = idDestDe(nota);
@@ -15,7 +15,7 @@ export function Identificacao({ nota, set }) {
           lista="naturezas" erro={!ide.natOp.trim() && 'Informe a natureza da operação'}
         />
         <datalist id="naturezas">{NATUREZAS.map((n) => <option key={n} value={n} />)}</datalist>
-        <Campo rotulo="Série" valor={ide.serie} onChange={s('serie')} largura="pp" inputMode="numeric" />
+        <Campo rotulo="Série" valor={ide.serie} onChange={s('serie')} onBlur={() => onSerie?.(ide.serie)} largura="pp" inputMode="numeric" />
         <Campo rotulo="Número" valor={ide.nNF} onChange={s('nNF')} largura="p" inputMode="numeric" obrigatorio erro={!(Number(ide.nNF) >= 1) && 'Inválido'} />
         <Selecao rotulo="Tipo" valor={ide.tpNF} onChange={s('tpNF')} opcoes={TP_NF} largura="p" />
         <Selecao rotulo="Finalidade" valor={ide.finNFe} onChange={s('finNFe')} opcoes={FIN_NFE} largura="p" />

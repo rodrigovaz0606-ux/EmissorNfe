@@ -40,3 +40,9 @@ test('números digitados no padrão brasileiro', () => {
   assert.equal(p.emit.ender.CEP, '74000000');
   assert.equal(p.ide.idDest, 1);
 });
+
+test('CEP do emitente aparece nas pendências', () => {
+  const n = notaCompleta();
+  n.emit.ender.CEP = '';
+  assert.ok(pendencias(n).includes('Emitente: CEP'));
+});

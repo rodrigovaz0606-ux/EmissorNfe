@@ -7,10 +7,10 @@ import { Destinatario } from './componentes/Destinatario.jsx';
 import { Itens } from './componentes/Itens.jsx';
 import { Pagamento } from './componentes/Pagamento.jsx';
 import { Resumo } from './componentes/Resumo.jsx';
+import { Notas } from './componentes/Notas.jsx';
 
 const CHAVE_RASCUNHO = 'emissor.rascunho';
 const CHAVE_EMITENTE = 'emissor.emitente';
-const CHAVE_NUMERO = 'emissor.proximoNumero';
 
 const ler = (k) => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } };
 const gravar = (k, v) => localStorage.setItem(k, JSON.stringify(v));
@@ -27,12 +27,7 @@ function comCaminho(obj, [chave, ...resto], valor) {
 function notaInicial() {
   const base = notaVazia();
   const emit = ler(CHAVE_EMITENTE);
-  const numero = ler(CHAVE_NUMERO);
-  return {
-    ...base,
-    emit: emit ? { ...base.emit, ...emit } : base.emit,
-    ide: { ...base.ide, ...(numero ? { nNF: String(numero) } : {}) },
-  };
+  return { ...base, emit: emit ? { ...base.emit, ...emit } : base.emit };
 }
 
 function StatusSefaz() {
@@ -55,6 +50,7 @@ function StatusSefaz() {
 }
 
 export default function App() {
+  const [aba, setAba] = React.useState(() => (window.location.hash === '#notas' ? 'notas' : 'emitir'));
   const [emissor, setEmissor] = React.useState(null);
   const [erroEmissor, setErroEmissor] = React.useState('');
   const [nota, setNota] = React.useState(() => ler(CHAVE_RASCUNHO) ?? notaInicial());
@@ -67,6 +63,11 @@ export default function App() {
     setResultado(null);
     if (caminho[0] === 'emit') setEmitenteSalvo(false);
   }, []);
+
+  const trocarAba = (a) => {
+    setAba(a);
+    history.replaceState(null, '', a === 'notas' ? '#notas' : '#');
+  };
 
   // Rascunho salvo automaticamente no navegador.
   React.useEffect(() => { gravar(CHAVE_RASCUNHO, nota); }, [nota]);
@@ -89,20 +90,33 @@ export default function App() {
     }).catch((e) => setErroEmissor(e.message));
   }, []);
 
+  // Sugere o próximo número livre da série (pelo banco), se o campo ainda estiver no padrão.
+  const sugerirNumero = React.useCallback(async (serie, forcar = false) => {
+    try {
+      const { proximo } = await api.proximoNumero(serie || 1);
+      setNota((n) => (forcar || n.ide.nNF === '' || n.ide.nNF === '1' ? { ...n, ide: { ...n.ide, nNF: String(proximo) } } : n));
+    } catch { /* API fora do ar: mantém o número digitado */ }
+  }, []);
+  React.useEffect(() => { sugerirNumero(nota.ide.serie); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const totais = totaisNota(nota);
   const listaPendencias = pendencias(nota);
   const listaAvisos = avisos(nota);
   const homologacao = emissor?.ambiente === 'homologacao';
 
   async function executar(modo) {
-    if (modo === 'emitir' && !window.confirm(`Enviar a nota nº ${nota.ide.nNF} para a SEFAZ-${emissor?.uf} em HOMOLOGAÇÃO (sem valor fiscal)?`)) return;
+    const destino = emissor?.simulada ? 'a SEFAZ SIMULADA (nada é enviado)' : `a SEFAZ-${emissor?.uf} em HOMOLOGAÇÃO (sem valor fiscal)`;
+    if (modo === 'emitir' && !window.confirm(`Enviar a nota nº ${nota.ide.nNF} para ${destino}?`)) return;
     setOcupado(modo);
     setResultado(null);
     try {
       const payload = paraPayload(nota);
-      const r = modo === 'validar' ? await api.validar(payload) : await api.emitir(payload);
-      setResultado({ ...r, modo });
-      if (r.protocolo?.autorizada) gravar(CHAVE_NUMERO, Number(nota.ide.nNF) + 1);
+      if (modo === 'previa') {
+        await api.previaDanfe(payload);
+      } else {
+        const r = modo === 'validar' ? await api.validar(payload) : await api.emitir(payload);
+        setResultado({ ...r, modo });
+      }
     } catch (e) {
       setResultado({ erro: e.message, modo });
     } finally {
@@ -118,10 +132,10 @@ export default function App() {
 
   function novaNota() {
     if (!window.confirm('Começar uma nota nova? Os dados do destinatário e dos itens serão apagados.')) return;
-    const proxima = resultado?.protocolo?.autorizada ? Number(nota.ide.nNF) + 1 : Number(ler(CHAVE_NUMERO) ?? nota.ide.nNF);
     const base = notaVazia();
-    setNota({ ...base, emit: nota.emit, ide: { ...base.ide, serie: nota.ide.serie, nNF: String(proxima) } });
+    setNota({ ...base, emit: nota.emit, ide: { ...base.ide, serie: nota.ide.serie } });
     setResultado(null);
+    sugerirNumero(nota.ide.serie, true);
   }
 
   return (
@@ -135,12 +149,9 @@ export default function App() {
           </div>
           {homologacao && <span className="selo-ambiente" title="As notas não têm valor fiscal">HOMOLOGAÇÃO</span>}
         </div>
-        <nav className="atalhos">
-          <a href="#identificacao">Identificação</a>
-          <a href="#emitente">Emitente</a>
-          <a href="#destinatario">Destinatário</a>
-          <a href="#itens">Produtos</a>
-          <a href="#pagamento">Pagamento</a>
+        <nav className="abas" role="tablist">
+          <button type="button" role="tab" aria-selected={aba === 'emitir'} className={aba === 'emitir' ? 'ativa' : ''} onClick={() => trocarAba('emitir')}>Emitir nota</button>
+          <button type="button" role="tab" aria-selected={aba === 'notas'} className={aba === 'notas' ? 'ativa' : ''} onClick={() => trocarAba('notas')}>Notas emitidas</button>
         </nav>
         <div className="topo-direita">
           {emissor && (
@@ -153,32 +164,42 @@ export default function App() {
         </div>
       </header>
 
+      {emissor?.simulada && (
+        <div className="faixa-simulada">SEFAZ SIMULADA — modo de teste da interface. Nada é enviado à SEFAZ e as “autorizações” são fictícias.</div>
+      )}
       {erroEmissor && <div className="faixa-erro">Não foi possível falar com a API local: {erroEmissor}. Ela está rodando (npm run dev)?</div>}
 
-      <div className="barra-acoes">
-        <div>
-          <h2>Nota fiscal nº {nota.ide.nNF || '—'} <small>série {nota.ide.serie}</small></h2>
-          <span>Rascunho salvo automaticamente neste navegador</span>
-        </div>
-        <div className="barra-botoes">
-          <button type="button" className="btn-texto" onClick={() => { setNota((n) => exemploSoja(n)); setResultado(null); }}>Carregar exemplo (soja)</button>
-          <button type="button" className="btn-secundario" onClick={novaNota}>Nova nota</button>
-        </div>
-      </div>
+      {aba === 'notas' ? (
+        <Notas emissor={emissor} />
+      ) : (
+        <>
+          <div className="barra-acoes">
+            <div>
+              <h2>Nota fiscal nº {nota.ide.nNF || '—'} <small>série {nota.ide.serie}</small></h2>
+              <span>Rascunho salvo automaticamente neste navegador</span>
+            </div>
+            <div className="barra-botoes">
+              <button type="button" className="btn-texto" onClick={() => { setNota((n) => exemploSoja(n)); setResultado(null); }}>Carregar exemplo (soja)</button>
+              <button type="button" className="btn-secundario" onClick={novaNota}>Nova nota</button>
+            </div>
+          </div>
 
-      <main className="conteudo">
-        <div className="formulario">
-          <Identificacao nota={nota} set={set} />
-          <Emitente nota={nota} set={set} certificado={emissor?.certificado} onSalvarPadrao={salvarEmitentePadrao} salvo={emitenteSalvo} />
-          <Destinatario nota={nota} set={set} homologacao={homologacao} />
-          <Itens nota={nota} set={set} />
-          <Pagamento nota={nota} set={set} vNF={totais.vNF} />
-        </div>
-        <Resumo
-          totais={totais} pendencias={listaPendencias} avisos={listaAvisos} ocupado={ocupado} resultado={resultado}
-          onValidar={() => executar('validar')} onEmitir={() => executar('emitir')}
-        />
-      </main>
+          <main className="conteudo">
+            <div className="formulario">
+              <Identificacao nota={nota} set={set} onSerie={(s) => sugerirNumero(s, true)} />
+              <Emitente nota={nota} set={set} certificado={emissor?.certificado} onSalvarPadrao={salvarEmitentePadrao} salvo={emitenteSalvo} />
+              <Destinatario nota={nota} set={set} homologacao={homologacao} />
+              <Itens nota={nota} set={set} />
+              <Pagamento nota={nota} set={set} vNF={totais.vNF} />
+            </div>
+            <Resumo
+              totais={totais} pendencias={listaPendencias} avisos={listaAvisos} ocupado={ocupado} resultado={resultado}
+              onValidar={() => executar('validar')} onEmitir={() => executar('emitir')} onPrevia={() => executar('previa')}
+              onVerNotas={() => trocarAba('notas')} onNovaNota={novaNota}
+            />
+          </main>
+        </>
+      )}
     </div>
   );
 }

@@ -46,6 +46,8 @@ function documento(pessoa, quem) {
 
 function endereco(nome, e) {
   exigir(e, `Endereço (${nome}) não informado.`);
+  // No schema, CEP é obrigatório no endereço do emitente (TEnderEmi) e opcional no do destinatário.
+  if (nome === 'enderEmit') exigir(/^\d{8}$/.test(soDigitos(e.CEP) ?? ''), 'CEP do emitente é obrigatório (8 dígitos).');
   return grupo(
     nome,
     tag('xLgr', texto(e.xLgr)),

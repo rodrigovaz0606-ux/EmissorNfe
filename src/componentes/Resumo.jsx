@@ -24,7 +24,7 @@ function Passo({ ok, rotulo, detalhe }) {
   );
 }
 
-function Resultado({ r }) {
+function Resultado({ r, onVerNotas, onNovaNota }) {
   if (r.erro) {
     return (
       <div className="resultado falha">
@@ -58,18 +58,24 @@ function Resultado({ r }) {
           />
         )}
       </ul>
-      {r.arquivos && (
+      {r.id && (
         <div className="downloads">
-          {r.arquivos.procNFe && <a className="btn-primario pequeno" href={api.urlArquivo(r.arquivos.procNFe)}>Baixar XML autorizado</a>}
-          <a href={api.urlArquivo(r.arquivos.nfe)}>XML enviado</a>
-          <a href={api.urlArquivo(r.arquivos.resposta)}>Resposta da SEFAZ</a>
+          <a className="btn-primario pequeno" href={api.urlDanfe(r.id)} target="_blank" rel="noreferrer">DANFE (PDF)</a>
+          <a href={api.urlXml(r.id)}>{autorizada ? 'XML autorizado' : 'XML enviado'}</a>
+          <a href={api.urlXml(r.id, 'resposta')}>Resposta da SEFAZ</a>
+        </div>
+      )}
+      {r.enviada && (
+        <div className="downloads">
+          <button type="button" className="btn-texto" onClick={onVerNotas}>Ver em Notas emitidas ›</button>
+          {autorizada && <button type="button" className="btn-texto" onClick={onNovaNota}>Emitir outra nota</button>}
         </div>
       )}
     </div>
   );
 }
 
-export function Resumo({ totais, pendencias, avisos, ocupado, resultado, onValidar, onEmitir }) {
+export function Resumo({ totais, pendencias, avisos, ocupado, resultado, onValidar, onEmitir, onPrevia, onVerNotas, onNovaNota }) {
   const completo = pendencias.length === 0;
   return (
     <aside className="resumo">
@@ -99,17 +105,20 @@ export function Resumo({ totais, pendencias, avisos, ocupado, resultado, onValid
           <ul className="avisos">{avisos.map((a) => <li key={a}>⚠ {a}</li>)}</ul>
         )}
         <div className="botoes">
-          <button type="button" className="btn-secundario" disabled={!completo || ocupado} onClick={onValidar}>
+          <button type="button" className="btn-secundario" disabled={!completo || Boolean(ocupado)} onClick={onValidar}>
             {ocupado === 'validar' ? 'Validando…' : 'Validar'}
           </button>
-          <button type="button" className="btn-primario" disabled={!completo || ocupado} onClick={onEmitir}>
+          <button type="button" className="btn-primario" disabled={!completo || Boolean(ocupado)} onClick={onEmitir}>
             {ocupado === 'emitir' ? 'Enviando à SEFAZ…' : 'Emitir nota'}
           </button>
         </div>
+        <button type="button" className="btn-texto previa" disabled={!completo || Boolean(ocupado)} onClick={onPrevia}>
+          {ocupado === 'previa' ? 'Gerando prévia…' : 'Pré-visualizar DANFE'}
+        </button>
         <p className="nota-rodape">“Validar” gera, assina e confere o XML sem enviar. “Emitir” envia para a SEFAZ em homologação.</p>
       </div>
 
-      {resultado && <Resultado r={resultado} />}
+      {resultado && <Resultado r={resultado} onVerNotas={onVerNotas} onNovaNota={onNovaNota} />}
     </aside>
   );
 }
