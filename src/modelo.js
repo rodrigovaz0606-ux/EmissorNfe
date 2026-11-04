@@ -1,7 +1,7 @@
 // Estado do formulário, conversão para o formato do backend, totais e pendências.
-// Reaproveita as funções do backend para que tela e XML calculem igual.
-import { cpfValido, cnpjValido } from '../server/fiscal/nfe/documentos.js';
-import { multiplicarEmCentavos, paraCentavos, centavos } from '../server/fiscal/nfe/formatos.js';
+// Usa o mesmo arredondamento do backend para que tela e XML calculem igual.
+import { cpfValido, cnpjValido } from './fiscal/documentos.js';
+import { multiplicarEmCentavos, paraCentavos, centavos } from './fiscal/valores.js';
 
 export { cpfValido, cnpjValido };
 
@@ -38,21 +38,30 @@ export const notaVazia = () => ({
   infAdic: { infCpl: '' },
 });
 
-export function exemploSoja(nota) {
-  return {
-    ...nota,
-    ide: { ...nota.ide, natOp: 'VENDA DE PRODUCAO DO ESTABELECIMENTO', indFinal: '1', indPres: '1' },
-    dest: {
-      tipo: 'PF', CPF: '123.456.789-09', CNPJ: '', xNome: 'COMPRADOR TESTE', indIEDest: '9', IE: '', email: '',
-      ender: { CEP: '74000-000', xLgr: 'AVENIDA TESTE', nro: '100', xCpl: '', xBairro: 'CENTRO', cMun: '5208707', xMun: 'GOIANIA', UF: 'GO', fone: '' },
-    },
-    itens: [{
-      ...itemVazio(), cProd: 'SOJA01', xProd: 'SOJA EM GRAOS', NCM: '1201.90.00', CFOP: '5101', uCom: 'SC', qCom: '500', vUnCom: '132,50',
-    }],
-    pag: [{ tPag: '01', vPag: '' }],
-    infAdic: { infCpl: 'ICMS DIFERIDO.' },
-  };
+// ---------- cadastro de produtos ----------
+const CAMPOS_PRODUTO = ['cProd', 'xProd', 'NCM', 'CFOP', 'uCom', 'vUnCom'];
+
+export const produtoVazio = () => {
+  const { cProd, xProd, NCM, CFOP, uCom, vUnCom, icms, pis, cofins } = itemVazio();
+  return { cProd, xProd, NCM, CFOP, uCom, vUnCom, icms, pis, cofins };
+};
+
+// Item da nota a partir de um produto cadastrado (quantidade 1; desconto e frete em branco).
+export function itemDoProduto(p) {
+  const base = itemVazio();
+  const item = { ...base, icms: { ...base.icms, ...p.icms }, pis: { ...base.pis, ...p.pis }, cofins: { ...base.cofins, ...p.cofins } };
+  for (const c of CAMPOS_PRODUTO) item[c] = p[c] ?? base[c];
+  return item;
 }
+
+// Produto a partir de um item da nota (para "salvar no cadastro").
+export function produtoDoItem(it) {
+  const p = { icms: { ...it.icms }, pis: { ...it.pis }, cofins: { ...it.cofins } };
+  for (const c of CAMPOS_PRODUTO) p[c] = it[c];
+  return p;
+}
+
+export const itemEstaVazio = (it) => !it.xProd.trim() && !it.cProd.trim() && !it.vUnCom;
 
 // ---------- totais (mesmas regras de gerarXml.js) ----------
 export function totaisItem(it) {

@@ -186,7 +186,7 @@ html { scroll-behavior: smooth; scroll-padding-top: 150px; }
 .item-total { min-width: 110px; text-align: right; font-variant-numeric: tabular-nums; }
 .seta { color: var(--suave); }
 .item-corpo { padding: 16px; display: flex; flex-direction: column; gap: 16px; }
-.item-rodape { display: flex; justify-content: flex-end; }
+.item-rodape { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 
 .tributos { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .tributo {
@@ -348,4 +348,89 @@ a.btn-secundario, a.btn-perigo { text-decoration: none; display: inline-block; }
 @media (max-width: 720px) {
   .abas { margin-left: 0; }
   .tabela-notas th:nth-child(2), .tabela-notas td:nth-child(2), .tabela-notas th:nth-child(3), .tabela-notas td:nth-child(3) { display: none; }
+}
+
+/* ---------- cadastro de produtos ---------- */
+.acoes-itens { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+.escolher-produto { display: flex; flex-direction: column; gap: 4px; }
+.escolher-produto select { min-width: 240px; }
+.busca { min-width: 280px; padding: 9px 12px; border: 1px solid var(--borda-forte); border-radius: 9px; font: inherit; }
+.form-produto { display: flex; flex-direction: column; gap: 16px; }
+.form-produto .janela-botoes { align-items: center; }
+.falta { margin-right: auto; color: var(--suave); font-size: 13px; }
+.tabela-notas td.vazio-pequeno { text-align: center; padding: 24px; cursor: default; }
+@media (max-width: 760px) {
+  .busca { min-width: 0; width: 100%; }
+  .escolher-produto select { min-width: 0; }
+}
+
+/* ---------- login e configuração inicial ---------- */
+.tela-acesso { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: radial-gradient(circle at 20% 10%, #134e4a 0, #0b1f24 55%); }
+.cartao-acesso { width: 100%; max-width: 400px; background: var(--cartao); border-radius: 16px; padding: 28px; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35); }
+.marca-acesso { margin-bottom: 22px; }
+.marca-acesso span { color: var(--suave); }
+.cartao-acesso h2 { font-size: 20px; }
+.acesso-subtitulo { color: var(--suave); margin: 6px 0 18px; line-height: 1.45; }
+.form-acesso { display: flex; flex-direction: column; gap: 14px; }
+.form-acesso input[type='file'] { padding: 8px; border: 1px dashed var(--borda-forte); border-radius: 8px; background: #f8fafb; }
+.btn-primario.largo { width: 100%; padding: 12px; margin-top: 4px; }
+.carregando-tela { padding: 48px; text-align: center; color: var(--suave); }
+
+/* ---------- topo: produtor e usuário ---------- */
+.produtor-atual {
+  display: flex; flex-direction: column; text-align: right; font-size: 13px; color: #e6f2f1;
+  background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 9px; padding: 5px 10px;
+}
+button.produtor-atual:hover { background: rgba(255, 255, 255, 0.12); }
+.produtor-atual small { color: #93b3b0; font-size: 11px; }
+.produtor-atual.sem-produtor { color: #fcd34d; }
+.menu-usuario { position: relative; }
+.botao-usuario { display: flex; align-items: center; gap: 8px; background: none; border: 0; color: #e6f2f1; padding: 4px; }
+.avatar { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; background: #14b8a6; color: #0b1f24; font-weight: 800; }
+.nome-usuario { display: flex; flex-direction: column; text-align: left; font-size: 13px; }
+.nome-usuario small { color: #93b3b0; font-size: 11px; }
+.menu-lista {
+  position: absolute; right: 0; top: calc(100% + 8px); min-width: 220px; background: white; color: var(--texto);
+  border: 1px solid var(--borda); border-radius: 10px; box-shadow: 0 12px 30px rgba(16, 24, 40, 0.18); padding: 6px; z-index: 40;
+}
+.menu-cabecalho { padding: 8px 10px; font-size: 12px; color: var(--suave); border-bottom: 1px solid var(--borda); margin-bottom: 4px; }
+.menu-lista button { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 9px 10px; border-radius: 7px; }
+.menu-lista button:hover, .menu-lista button:focus { background: #f0faf8; outline: none; }
+
+/* ---------- produtores ---------- */
+.cartoes-produtores { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
+.cartao-produtor { background: var(--cartao); border: 1px solid var(--borda); border-radius: var(--raio); box-shadow: var(--sombra); padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.cartao-produtor.ativo { border-color: var(--cor); box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.15); }
+.cartao-produtor-topo { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.cartao-produtor h3 { font-size: 15px; }
+.cartao-produtor .doc { color: var(--suave); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.cartao-produtor dl { margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
+.cartao-produtor dt { font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--suave); }
+.cartao-produtor dd { margin: 2px 0 0; font-weight: 600; }
+.cartao-produtor dd.vence { color: var(--erro); }
+.cartao-produtor-acoes { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: auto; padding-top: 10px; border-top: 1px solid var(--borda); }
+
+/* ---------- administração ---------- */
+.marcadores { display: flex; gap: 18px; flex-wrap: wrap; }
+.marcador { display: flex; align-items: center; gap: 7px; font-weight: 600; font-size: 13px; }
+.marcador.desabilitado { color: var(--suave); }
+.selo.voce { margin-left: 8px; }
+@media (max-width: 760px) {
+  .nome-usuario { display: none; }
+  .produtor-atual small { display: none; }
+}
+
+/* topo com mais itens (abas, produtor, status, usuário): nada quebra linha */
+.topo { gap: 16px; }
+.abas { margin-left: 4px; }
+.abas button, .marca span, .status-sefaz, .nome-usuario, .produtor-atual { white-space: nowrap; }
+.topo-direita { gap: 10px; }
+@media (max-width: 1560px) {
+  .marca > div > span { display: none; }
+  .marca .selo-ambiente { margin-left: 0; padding: 3px 8px; font-size: 10px; }
+  .abas button { padding: 7px 10px; }
+}
+@media (max-width: 1360px) {
+  .status-sefaz { font-size: 0; gap: 0; padding: 8px; } /* só o ponto colorido; o texto fica no title */
+  .nome-usuario { display: none; }
 }

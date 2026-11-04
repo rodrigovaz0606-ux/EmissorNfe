@@ -2,7 +2,7 @@
 // Rode com: npm run e2e
 import { describe, test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -12,9 +12,15 @@ const PORTA = 3399;
 const URL_APP = `http://127.0.0.1:${PORTA}`;
 const DB = path.resolve('data', 'e2e.sqlite');
 const PRINTS = process.env.E2E_PRINTS; // pasta opcional para salvar capturas de tela
+// Backend em Rust, compilado em modo release pelo script npm run e2e.
+const BINARIO = path.resolve('backend', 'target', 'release', process.platform === 'win32' ? 'emissor-nfe.exe' : 'emissor-nfe');
+// Certificados FICTÍCIOS de teste (autoassinados, senha "teste"). Nenhum certificado real é usado.
+const PFX_CPF = path.resolve('backend', 'tests', 'fixtures', 'teste-cpf.pfx'); // PRODUTOR TESTE, CPF 529.982.247-25
+const PFX_CNPJ = path.resolve('backend', 'tests', 'fixtures', 'teste.pfx'); // EMPRESA TESTE, CNPJ 12.345.678/0001-95
 
 let servidor;
 let edge;
+let perfilEdge; // pasta temporária exclusiva deste Edge de teste
 let navegador;
 let pagina;
 const errosDaPagina = [];
@@ -27,8 +33,12 @@ const PORTA_CDP = 9334;
 
 async function abrirEdge() {
   if (!EDGE) throw new Error('Microsoft Edge não encontrado');
-  const perfil = fs.mkdtempSync(path.join(os.tmpdir(), 'emissor-e2e-'));
-  edge = spawn(EDGE, ['--headless=new', `--remote-debugging-port=${PORTA_CDP}`, `--user-data-dir=${perfil}`, '--no-first-run', '--no-default-browser-check', 'about:blank'], { stdio: 'ignore' });
+  // Um Edge esquecido de outra execução na mesma porta faria o teste conversar com ele: falha logo.
+  if (await fetch(`http://127.0.0.1:${PORTA_CDP}/json/version`).then(() => true, () => false)) {
+    throw new Error(`Já existe um Edge de teste na porta ${PORTA_CDP}; feche-o antes de rodar o e2e.`);
+  }
+  perfilEdge = fs.mkdtempSync(path.join(os.tmpdir(), 'emissor-e2e-'));
+  edge = spawn(EDGE, ['--headless=new', `--remote-debugging-port=${PORTA_CDP}`, `--user-data-dir=${perfilEdge}`, '--no-first-run', '--no-default-browser-check', 'about:blank'], { stdio: 'ignore' });
   for (let i = 0; i < 60; i++) {
     try {
       if ((await fetch(`http://127.0.0.1:${PORTA_CDP}/json/version`)).ok) return chromium.connectOverCDP(`http://127.0.0.1:${PORTA_CDP}`);
@@ -41,7 +51,7 @@ async function abrirEdge() {
 async function esperarServidor() {
   for (let i = 0; i < 60; i++) {
     try {
-      if ((await fetch(`${URL_APP}/api/emissor`)).ok) return;
+      if ((await fetch(`${URL_APP}/api/auth/estado`)).ok) return;
     } catch { /* ainda subindo */ }
     await new Promise((r) => setTimeout(r, 250));
   }
@@ -52,12 +62,14 @@ const print = async (nome) => PRINTS && pagina.screenshot({ path: path.join(PRIN
 
 describe('interface (Edge + SEFAZ simulada)', () => {
   before(async () => {
-    for (const f of [DB, `${DB}-wal`, `${DB}-shm`]) fs.rmSync(f, { force: true });
-    servidor = spawn(process.execPath, ['server/index.js'], {
-      env: { ...process.env, PORT: String(PORTA), NFE_SEFAZ_SIMULADA: '1', NFE_DB: DB },
+    for (const f of [DB, `${DB}-wal`, `${DB}-shm`, path.join(path.dirname(DB), 'chave-mestra.key')]) fs.rmSync(f, { force: true });
+    if (!fs.existsSync(BINARIO)) throw new Error(`Backend não compilado: ${BINARIO} (rode npm run e2e)`);
+    servidor = spawn(BINARIO, ['servidor'], {
+      env: { ...process.env, PORT: String(PORTA), NFE_SEFAZ_SIMULADA: '1', NFE_DB: DB, NFE_CHAVE_MESTRA: 'ab'.repeat(32) },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     servidor.stderr.on('data', (d) => process.stderr.write(`[api] ${d}`));
+    servidor.on('exit', (c) => c && console.error(`[api] servidor saiu com código ${c}`));
     await esperarServidor();
     navegador = await abrirEdge();
     pagina = await (await navegador.newContext({ viewport: { width: 1440, height: 900 }, locale: 'pt-BR' })).newPage();
@@ -67,28 +79,119 @@ describe('interface (Edge + SEFAZ simulada)', () => {
 
   after(async () => {
     await navegador?.close().catch(() => {});
-    edge?.kill();
+    // O msedge.exe iniciado repassa para outro processo e sai; por isso encerra todos os
+    // processos do Edge que usam o perfil temporário deste teste (e só eles).
+    if (perfilEdge && process.platform === 'win32') {
+      const filtro = `$_.CommandLine -like '*${path.basename(perfilEdge)}*'`;
+      spawnSync('powershell', ['-NoProfile', '-Command',
+        `Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" | Where-Object { ${filtro} } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`],
+      { stdio: 'ignore' });
+    } else {
+      edge?.kill();
+    }
     servidor?.kill();
   });
 
-  test('abre com dados do certificado e faixa de SEFAZ simulada', async () => {
+  test('primeiro acesso cria o administrador', async () => {
     await pagina.goto(URL_APP);
     await pagina.evaluate(() => localStorage.clear());
     await pagina.reload();
+    await pagina.getByRole('heading', { name: 'Primeiro acesso' }).waitFor();
+    await pagina.getByLabel('Seu nome').fill('Rodrigo Teste');
+    await pagina.getByLabel('Usuário').fill('rodrigo');
+    await pagina.getByLabel('Senha', { exact: true }).fill('senha-do-admin');
+    await pagina.getByLabel('Confirme a senha').fill('senha-diferente');
+    await pagina.getByText('As senhas não conferem.').waitFor();
+    await pagina.getByLabel('Confirme a senha').fill('senha-do-admin');
+    await print('00-primeiro-acesso');
+    await pagina.getByRole('button', { name: 'Criar administrador e entrar' }).click();
+    await pagina.getByRole('heading', { name: 'Escolha o produtor' }).waitFor();
+    assert.equal(await pagina.getByRole('tab', { name: 'Emitir nota' }).count(), 0); // sem produtor, não emite
+    await pagina.getByRole('tab', { name: 'Administração' }).waitFor();
+  });
+
+  test('adiciona o produtor pelo certificado (senha errada é recusada)', async () => {
+    const enviar = async (arquivo, senha) => {
+      await pagina.getByRole('button', { name: '+ Adicionar produtor' }).click();
+      const janela = pagina.getByRole('dialog');
+      await janela.getByLabel('Arquivo do certificado').setInputFiles(arquivo);
+      await janela.getByLabel('Senha do certificado').fill(senha);
+      await janela.getByRole('button', { name: 'Adicionar e usar' }).click();
+      return janela;
+    };
+    const janela = await enviar(PFX_CPF, 'errada');
+    await janela.getByText(/senha incorreta/).waitFor();
+    await janela.getByRole('button', { name: 'Cancelar' }).click();
+    await enviar(PFX_CPF, 'teste');
+    await pagina.getByRole('tab', { name: 'Emitir nota', selected: true }).waitFor();
+    await print('01-produtor-adicionado');
+  });
+
+  test('abre com dados do certificado e faixa de SEFAZ simulada', async () => {
     await pagina.getByText('SEFAZ SIMULADA — modo de teste').waitFor();
     await pagina.getByText('SEFAZ em operação').waitFor();
-    assert.match(await pagina.locator('.certificado').innerText(), /e-CPF/);
+    assert.match(await pagina.locator('.produtor-atual').innerText(), /PRODUTOR TESTE[\s\S]*e-CPF 529\.982\.247-25/);
     assert.equal(await pagina.getByRole('button', { name: 'Emitir nota' }).isDisabled(), true);
     assert.match(await pagina.locator('.pendencias summary').innerText(), /\d+ pendências/);
   });
 
-  test('preenche a nota, busca CEP e valida (assinatura + XSD)', async () => {
-    await pagina.getByRole('button', { name: 'Carregar exemplo (soja)' }).click();
+  test('cadastra, edita e exclui produtos na aba Produtos', async () => {
+    await pagina.getByRole('tab', { name: 'Produtos' }).click();
+    await pagina.getByText('Nenhum produto cadastrado').waitFor();
+
+    const cadastrar = async (campos) => {
+      await pagina.getByRole('button', { name: '+ Novo produto' }).click();
+      const janela = pagina.getByRole('dialog');
+      for (const [rotulo, valor] of Object.entries(campos)) await janela.getByLabel(rotulo).fill(valor);
+      await janela.getByRole('button', { name: 'Cadastrar produto' }).click();
+      await janela.waitFor({ state: 'detached' });
+    };
+    await cadastrar({ Código: 'SOJA01', Descrição: 'soja em graos', NCM: '1201.90.00', 'CFOP padrão': '5101', Unidade: 'SC', 'Preço unitário': '132,50' });
+    await cadastrar({ Código: 'MILHO01', Descrição: 'MILHO', NCM: '10059010', 'CFOP padrão': '5101', Unidade: 'SC' });
+
+    // Código repetido é recusado pelo backend
+    await pagina.getByRole('button', { name: '+ Novo produto' }).click();
+    const dup = pagina.getByRole('dialog');
+    for (const [r, v] of [['Código', 'soja01'], ['Descrição', 'X'], ['NCM', '12019000'], ['CFOP padrão', '5101']]) await dup.getByLabel(r).fill(v);
+    await dup.getByRole('button', { name: 'Cadastrar produto' }).click();
+    await dup.getByText(/Já existe um produto com o código SOJA01/i).waitFor();
+    await dup.getByRole('button', { name: 'Cancelar' }).click();
+
+    const linhas = pagina.locator('.tabela-notas tbody tr');
+    assert.equal(await linhas.count(), 2);
+    assert.match(await linhas.nth(1).innerText(), /SOJA01\s+SOJA EM GRAOS\s+1201\.90\.00/); // ordem alfabética, descrição em maiúsculas
+    await print('0-produtos');
+
+    // Edição: muda o preço do milho
+    await linhas.nth(0).click();
+    await pagina.getByRole('dialog').getByLabel('Preço unitário').fill('58,40');
+    await pagina.getByRole('dialog').getByRole('button', { name: 'Salvar alterações' }).click();
+    await pagina.getByText('Produto MILHO alterado.').waitFor();
+    assert.match(await linhas.nth(0).innerText(), /R\$\s*58,40/);
+
+    // Busca e exclusão
+    await pagina.getByLabel('Buscar produto').fill('soja');
+    assert.equal(await linhas.count(), 1);
+    await pagina.getByLabel('Buscar produto').fill('');
+    await pagina.getByRole('button', { name: 'Excluir MILHO' }).click();
+    await pagina.getByText('Produto MILHO excluído.').waitFor();
+    assert.equal(await linhas.count(), 1);
+  });
+
+  test('preenche a nota com produto do cadastro, busca CEP e valida (assinatura + XSD)', async () => {
+    await pagina.getByRole('tab', { name: 'Emitir nota' }).click();
+    assert.equal(await pagina.getByRole('button', { name: /exemplo/i }).count(), 0);
+    const itens = pagina.locator('#itens');
+    await itens.getByLabel('Produto cadastrado').selectOption({ label: 'SOJA EM GRAOS (SOJA01)' });
+    assert.equal(await itens.locator('.item').count(), 1); // substituiu o item em branco
+    assert.equal(await itens.getByLabel('Descrição').inputValue(), 'SOJA EM GRAOS');
+    assert.equal(await itens.getByLabel('Valor unitário').inputValue(), '132,50');
+    await itens.getByLabel('Quantidade').fill('500');
 
     const emitente = pagina.locator('#emitente');
     await emitente.getByLabel('Inscrição estadual').fill('109876547');
     // CEP do emitente é obrigatório: sem ele a nota não fica completa
-    assert.match(await pagina.locator('.pendencias').innerText(), /Emitente: CEP/);
+    assert.match(await pagina.locator('.pendencias').textContent(), /Emitente: CEP/); // lista recolhida: textContent
     await emitente.getByLabel('CEP').fill('74000-000');
     await emitente.getByLabel('Logradouro').fill('RODOVIA GO-060 KM 10');
     await emitente.getByLabel('Bairro').fill('ZONA RURAL');
@@ -97,12 +200,18 @@ describe('interface (Edge + SEFAZ simulada)', () => {
 
     // Busca de CEP real (ViaCEP) no destinatário. Se a internet falhar, o teste avisa e segue.
     const dest = pagina.locator('#destinatario');
+    await dest.getByLabel('CPF').fill('123.456.789-09');
+    await dest.getByLabel('Nome / Razão social').fill('COMPRADOR TESTE');
+    await dest.getByLabel('Número').fill('100');
     await dest.getByLabel('CEP').fill('74003-010');
     await dest.getByRole('button', { name: 'Buscar' }).click();
     try {
       await pagina.waitForFunction(() => document.querySelectorAll('#destinatario input')[0] && [...document.querySelectorAll('#destinatario input')].some((i) => i.value === '5208707'), null, { timeout: 8000 });
     } catch {
-      console.warn('  ! ViaCEP não respondeu; preenchendo o município à mão');
+      console.warn('  ! ViaCEP não respondeu; preenchendo o endereço à mão');
+      await dest.getByLabel('Logradouro').fill('AVENIDA TESTE');
+      await dest.getByLabel('Bairro').fill('CENTRO');
+      await dest.getByLabel('Município').fill('GOIANIA');
       await dest.getByLabel('Cód. IBGE').fill('5208707');
     }
 
@@ -135,8 +244,10 @@ describe('interface (Edge + SEFAZ simulada)', () => {
     assert.match(resultado, /100 — Autorizado o uso da NF-e \(SIMULADO\)/);
     assert.match(resultado, /Protocolo \d{15}/);
     const href = await pagina.getByRole('link', { name: 'DANFE (PDF)' }).getAttribute('href');
-    const pdf = await fetch(URL_APP + href);
-    assert.equal(pdf.headers.get('content-type'), 'application/pdf');
+    // dentro do navegador logado o PDF vem; sem a sessão (fora do navegador), não
+    const tipo = await pagina.evaluate((u) => fetch(u).then((r) => r.headers.get('content-type')), href);
+    assert.equal(tipo, 'application/pdf');
+    assert.equal((await fetch(URL_APP + href)).status, 401);
     await print('2-autorizada');
   });
 
@@ -191,13 +302,97 @@ describe('interface (Edge + SEFAZ simulada)', () => {
   });
 
   test('NCM inválido aparece como erro no campo e nas pendências', async () => {
-    await pagina.getByRole('button', { name: 'Carregar exemplo (soja)' }).click();
+    await pagina.locator('#itens').getByLabel('Produto cadastrado').selectOption({ label: 'SOJA EM GRAOS (SOJA01)' });
     const ncm = pagina.locator('#itens').getByLabel('NCM');
     await ncm.fill('1201');
     await ncm.blur();
     await pagina.locator('#itens').getByText('8 dígitos').waitFor();
-    await pagina.locator('.pendencias').getByText('Item 1: NCM com 8 dígitos').waitFor();
+    await pagina.locator('.pendencias').getByText('Item 1: NCM com 8 dígitos').waitFor({ state: 'attached' });
     await print('5-erro-ncm');
+  });
+
+  test('item da nota pode ser salvo no cadastro de produtos', async () => {
+    const itens = pagina.locator('#itens');
+    await itens.getByRole('button', { name: '+ Item em branco' }).click();
+    const item = itens.locator('.item').nth(1);
+    await item.getByLabel('Código').fill('FEIJAO01');
+    await item.getByLabel('Descrição').fill('FEIJAO CARIOCA');
+    await item.getByLabel('NCM').fill('07133399');
+    await item.getByRole('button', { name: 'Salvar no cadastro de produtos' }).click();
+    await item.getByText('Produto FEIJAO01 cadastrado.').waitFor();
+    await itens.getByLabel('Produto cadastrado').locator('option', { hasText: 'FEIJAO CARIOCA (FEIJAO01)' }).waitFor({ state: 'attached' });
+  });
+
+  test('troca de produtor separa notas, produtos e numeração', async () => {
+    await pagina.locator('.produtor-atual').click(); // atalho do topo para a tela de produtores
+    await pagina.getByRole('button', { name: '+ Adicionar produtor' }).click();
+    const janela = pagina.getByRole('dialog');
+    await janela.getByLabel('Arquivo do certificado').setInputFiles(PFX_CNPJ);
+    await janela.getByLabel('Senha do certificado').fill('teste');
+    await janela.getByRole('button', { name: 'Adicionar e usar' }).click();
+    await pagina.getByRole('heading', { name: /Nota fiscal nº 1\b/ }).waitFor(); // numeração própria do novo produtor
+    assert.match(await pagina.locator('.produtor-atual').innerText(), /EMPRESA TESTE[\s\S]*12\.345\.678\/0001-95/);
+    assert.equal(await pagina.locator('#itens').getByLabel('Produto cadastrado').isDisabled(), true); // produtos são do outro produtor
+
+    await pagina.getByRole('tab', { name: 'Notas emitidas' }).click();
+    await pagina.getByText('Nenhuma nota ainda').waitFor();
+    assert.equal(await pagina.getByRole('button', { name: 'Inutilizar numeração' }).isDisabled(), false); // CNPJ pode inutilizar
+
+    // volta para o produtor CPF: as notas dele continuam lá
+    await pagina.getByRole('tab', { name: 'Produtores' }).click();
+    const cartaoCpf = pagina.locator('.cartao-produtor[data-documento="52998224725"]');
+    await cartaoCpf.getByRole('button', { name: 'Usar este produtor' }).click();
+    await pagina.getByRole('tab', { name: 'Notas emitidas' }).click();
+    await pagina.locator('.tabela-notas tbody tr').first().getByText('Cancelada').waitFor();
+    await pagina.getByRole('tab', { name: 'Produtores' }).click();
+    await cartaoCpf.getByText('Em uso').waitFor();
+    await print('06-produtores');
+  });
+
+  test('administrador cria usuário; o usuário não vê os produtores do admin nem a administração', async () => {
+    await pagina.getByRole('tab', { name: 'Administração' }).click();
+    await pagina.getByRole('button', { name: '+ Novo usuário' }).click();
+    const janela = pagina.getByRole('dialog');
+    await janela.getByLabel('Nome').fill('Maria Operadora');
+    await janela.getByLabel('Usuário (login)').fill('maria');
+    await janela.getByLabel('Senha inicial').fill('senha-da-maria');
+    await janela.getByRole('button', { name: 'Criar usuário' }).click();
+    await pagina.getByText('Usuário maria criado.').waitFor();
+    assert.match(await pagina.locator('.tabela-notas').innerText(), /Maria Operadora\s+maria\s+Usuário\s+0/);
+    await print('07-administracao');
+
+    // sair e entrar como Maria
+    await pagina.locator('.botao-usuario').click();
+    await pagina.getByRole('menuitem', { name: 'Sair' }).click();
+    await pagina.getByRole('heading', { name: 'Entrar' }).waitFor();
+    await pagina.getByLabel('Usuário').fill('maria');
+    await pagina.getByLabel('Senha').fill('senha-errada');
+    await pagina.getByRole('button', { name: 'Entrar' }).click();
+    await pagina.getByText('Usuário ou senha incorretos.').waitFor();
+    await pagina.getByLabel('Senha').fill('senha-da-maria');
+    await pagina.getByRole('button', { name: 'Entrar' }).click();
+    await pagina.getByRole('heading', { name: 'Escolha o produtor' }).waitFor();
+    await pagina.getByText('Nenhum produtor cadastrado').waitFor();
+    assert.equal(await pagina.getByRole('tab', { name: 'Administração' }).count(), 0);
+    await print('08-usuario-comum');
+
+    // a API também barra (não é só a tela)
+    const r = await pagina.evaluate(() => fetch('/api/admin/usuarios').then((x) => x.status));
+    assert.equal(r, 403);
+  });
+
+  test('sair encerra a sessão no servidor', async () => {
+    await pagina.locator('.botao-usuario').click();
+    await pagina.getByRole('menuitem', { name: 'Sair' }).click();
+    await pagina.getByRole('heading', { name: 'Entrar' }).waitFor();
+    const r = await pagina.evaluate(() => fetch('/api/produtores').then((x) => x.status));
+    assert.equal(r, 401);
+    // o administrador entra de novo e encontra o produtor que estava usando
+    await pagina.getByLabel('Usuário').fill('rodrigo');
+    await pagina.getByLabel('Senha').fill('senha-do-admin');
+    await pagina.getByRole('button', { name: 'Entrar' }).click();
+    await pagina.getByRole('heading', { name: 'Escolha o produtor' }).waitFor(); // sessão nova começa sem produtor
+    assert.equal(await pagina.locator('.cartao-produtor').count(), 2);
   });
 
   test('nenhum erro de JavaScript na página', () => {

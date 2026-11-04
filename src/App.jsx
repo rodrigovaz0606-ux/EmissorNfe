@@ -1,6 +1,6 @@
 import React from 'react';
-import { api } from './api.js';
-import { notaVazia, exemploSoja, totaisNota, pendencias, avisos, paraPayload } from './modelo.js';
+import { api, EVENTO_SESSAO } from './api.js';
+import { notaVazia, totaisNota, pendencias, avisos, paraPayload } from './modelo.js';
 import { Identificacao } from './componentes/Identificacao.jsx';
 import { Emitente } from './componentes/Emitente.jsx';
 import { Destinatario } from './componentes/Destinatario.jsx';
@@ -8,9 +8,14 @@ import { Itens } from './componentes/Itens.jsx';
 import { Pagamento } from './componentes/Pagamento.jsx';
 import { Resumo } from './componentes/Resumo.jsx';
 import { Notas } from './componentes/Notas.jsx';
+import { Produtos } from './componentes/Produtos.jsx';
+import { Produtores, formatarDoc } from './componentes/Produtores.jsx';
+import { Admin, JanelaSenha } from './componentes/Admin.jsx';
+import { TelaLogin, TelaConfiguracao } from './componentes/Acesso.jsx';
 
-const CHAVE_RASCUNHO = 'emissor.rascunho';
-const CHAVE_EMITENTE = 'emissor.emitente';
+const ABAS_EMISSAO = [['emitir', 'Emitir nota'], ['notas', 'Notas emitidas'], ['produtos', 'Produtos']];
+// Rascunho da nota por produtor (trocar de produtor não mistura os rascunhos).
+const chaveRascunho = (produtorId) => `emissor.rascunho.${produtorId}`;
 
 const ler = (k) => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } };
 const gravar = (k, v) => localStorage.setItem(k, JSON.stringify(v));
@@ -24,10 +29,11 @@ function comCaminho(obj, [chave, ...resto], valor) {
     : { ...obj, [chave]: comCaminho(atual, resto, valor) };
 }
 
-function notaInicial() {
+// Nota nova com o emitente padrão do produtor (guardado no servidor).
+function notaInicial(produtor) {
   const base = notaVazia();
-  const emit = ler(CHAVE_EMITENTE);
-  return { ...base, emit: emit ? { ...base.emit, ...emit } : base.emit };
+  const emit = produtor?.emitente;
+  return { ...base, emit: emit ? { ...base.emit, ...emit, ender: { ...base.emit.ender, ...emit.ender } } : base.emit };
 }
 
 function StatusSefaz() {
@@ -43,17 +49,45 @@ function StatusSefaz() {
   }, []);
   React.useEffect(() => { consultar(); }, [consultar]);
   return (
-    <button type="button" className={`status-sefaz ${estado.carregando ? '' : estado.ok ? 'ok' : 'falha'}`} onClick={consultar} title={estado.detalhe ?? 'Clique para consultar de novo'}>
+    <button type="button" className={`status-sefaz ${estado.carregando ? '' : estado.ok ? 'ok' : 'falha'}`} onClick={consultar} title={`${estado.texto ?? 'Consultando'}${estado.detalhe ? ` — ${estado.detalhe}` : ''} (clique para consultar de novo)`}>
       <span className="ponto" /> {estado.carregando ? 'Consultando SEFAZ…' : estado.texto}
     </button>
   );
 }
 
-export default function App() {
-  const [aba, setAba] = React.useState(() => (window.location.hash === '#notas' ? 'notas' : 'emitir'));
-  const [emissor, setEmissor] = React.useState(null);
-  const [erroEmissor, setErroEmissor] = React.useState('');
-  const [nota, setNota] = React.useState(() => ler(CHAVE_RASCUNHO) ?? notaInicial());
+function MenuUsuario({ usuario, onSenha, onSair }) {
+  const [aberto, setAberto] = React.useState(false);
+  const ref = React.useRef(null);
+  React.useEffect(() => {
+    if (!aberto) return undefined;
+    const fora = (e) => !ref.current?.contains(e.target) && setAberto(false);
+    const esc = (e) => e.key === 'Escape' && setAberto(false);
+    document.addEventListener('mousedown', fora);
+    document.addEventListener('keydown', esc);
+    return () => { document.removeEventListener('mousedown', fora); document.removeEventListener('keydown', esc); };
+  }, [aberto]);
+  return (
+    <div className="menu-usuario" ref={ref}>
+      <button type="button" className="botao-usuario" aria-haspopup="menu" aria-expanded={aberto} onClick={() => setAberto(!aberto)}>
+        <span className="avatar" aria-hidden="true">{usuario.nome.trim()[0]?.toUpperCase()}</span>
+        <span className="nome-usuario">{usuario.nome}{usuario.admin && <small>Administrador</small>}</span>
+        <span aria-hidden="true">▾</span>
+      </button>
+      {aberto && (
+        <div className="menu-lista" role="menu">
+          <div className="menu-cabecalho">Entrou como <strong>{usuario.login}</strong></div>
+          <button type="button" role="menuitem" onClick={() => { setAberto(false); onSenha(); }}>Alterar minha senha</button>
+          <button type="button" role="menuitem" onClick={() => { setAberto(false); onSair(); }}>Sair</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Formulário de emissão do produtor ativo.
+function Emissao({ produtor, emissor, onVerNotas, produtos, carregarProdutos }) {
+  const chave = chaveRascunho(produtor.id);
+  const [nota, setNota] = React.useState(() => ler(chave) ?? notaInicial(produtor));
   const [ocupado, setOcupado] = React.useState(null);
   const [resultado, setResultado] = React.useState(null);
   const [emitenteSalvo, setEmitenteSalvo] = React.useState(false);
@@ -64,31 +98,24 @@ export default function App() {
     if (caminho[0] === 'emit') setEmitenteSalvo(false);
   }, []);
 
-  const trocarAba = (a) => {
-    setAba(a);
-    history.replaceState(null, '', a === 'notas' ? '#notas' : '#');
-  };
-
   // Rascunho salvo automaticamente no navegador.
-  React.useEffect(() => { gravar(CHAVE_RASCUNHO, nota); }, [nota]);
+  React.useEffect(() => { gravar(chave, nota); }, [chave, nota]);
 
-  // Dados do emissor: o documento do emitente vem sempre do certificado.
+  // O documento do emitente vem sempre do certificado do produtor.
   React.useEffect(() => {
-    api.emissor().then((e) => {
-      setEmissor(e);
-      const doc = e.certificado.documento;
-      setNota((n) => ({
-        ...n,
-        emit: {
-          ...n.emit,
-          CPF: doc.length === 11 ? doc : '',
-          CNPJ: doc.length === 14 ? doc : '',
-          xNome: n.emit.xNome || e.certificado.titular,
-          ender: { ...n.emit.ender, UF: n.emit.ender.UF || e.uf },
-        },
-      }));
-    }).catch((e) => setErroEmissor(e.message));
-  }, []);
+    if (!emissor) return;
+    const doc = emissor.certificado.documento ?? '';
+    setNota((n) => ({
+      ...n,
+      emit: {
+        ...n.emit,
+        CPF: doc.length === 11 ? doc : '',
+        CNPJ: doc.length === 14 ? doc : '',
+        xNome: n.emit.xNome || emissor.certificado.titular,
+        ender: { ...n.emit.ender, UF: n.emit.ender.UF || emissor.uf },
+      },
+    }));
+  }, [emissor]);
 
   // Sugere o próximo número livre da série (pelo banco), se o campo ainda estiver no padrão.
   const sugerirNumero = React.useCallback(async (serie, forcar = false) => {
@@ -106,7 +133,7 @@ export default function App() {
 
   async function executar(modo) {
     const destino = emissor?.simulada ? 'a SEFAZ SIMULADA (nada é enviado)' : `a SEFAZ-${emissor?.uf} em HOMOLOGAÇÃO (sem valor fiscal)`;
-    if (modo === 'emitir' && !window.confirm(`Enviar a nota nº ${nota.ide.nNF} para ${destino}?`)) return;
+    if (modo === 'emitir' && !window.confirm(`Enviar a nota nº ${nota.ide.nNF} de ${produtor.titular} para ${destino}?`)) return;
     setOcupado(modo);
     setResultado(null);
     try {
@@ -124,10 +151,24 @@ export default function App() {
     }
   }
 
-  function salvarEmitentePadrao() {
+  async function salvarEmitentePadrao() {
     const { CPF, CNPJ, ...resto } = nota.emit;
-    gravar(CHAVE_EMITENTE, resto);
-    setEmitenteSalvo(true);
+    try {
+      await api.definirEmitente(produtor.id, resto);
+      setEmitenteSalvo(true);
+    } catch (e) {
+      window.alert(e.message);
+    }
+  }
+
+  async function salvarProduto(p) {
+    const existente = produtos?.find((x) => x.cProd.toUpperCase() === p.cProd.trim().toUpperCase());
+    if (existente && !window.confirm(`Já existe o produto ${existente.cProd} (${existente.xProd}). Substituir pelos dados deste item?`)) {
+      return 'Cadastro mantido como estava.';
+    }
+    const r = existente ? await api.alterarProduto(existente.id, p) : await api.criarProduto(p);
+    await carregarProdutos();
+    return existente ? `Produto ${r.cProd} atualizado no cadastro.` : `Produto ${r.cProd} cadastrado.`;
   }
 
   function novaNota() {
@@ -139,67 +180,161 @@ export default function App() {
   }
 
   return (
+    <>
+      <div className="barra-acoes">
+        <div>
+          <h2>Nota fiscal nº {nota.ide.nNF || '—'} <small>série {nota.ide.serie}</small></h2>
+          <span>Rascunho salvo automaticamente neste navegador</span>
+        </div>
+        <div className="barra-botoes">
+          <button type="button" className="btn-secundario" onClick={novaNota}>Nova nota</button>
+        </div>
+      </div>
+
+      <main className="conteudo">
+        <div className="formulario">
+          <Identificacao nota={nota} set={set} onSerie={(s) => sugerirNumero(s, true)} />
+          <Emitente nota={nota} set={set} certificado={emissor?.certificado} onSalvarPadrao={salvarEmitentePadrao} salvo={emitenteSalvo} />
+          <Destinatario nota={nota} set={set} homologacao={homologacao} />
+          <Itens nota={nota} set={set} produtos={produtos} onSalvarProduto={salvarProduto} />
+          <Pagamento nota={nota} set={set} vNF={totais.vNF} />
+        </div>
+        <Resumo
+          totais={totais} pendencias={listaPendencias} avisos={listaAvisos} ocupado={ocupado} resultado={resultado}
+          onValidar={() => executar('validar')} onEmitir={() => executar('emitir')} onPrevia={() => executar('previa')}
+          onVerNotas={onVerNotas} onNovaNota={novaNota}
+        />
+      </main>
+    </>
+  );
+}
+
+// Área logada. `produtor` = produtor ativo (ou null: só dá para escolher/cadastrar produtor).
+function Principal({ estado, onEstado, onSair }) {
+  const { usuario, produtor } = estado;
+  const abas = [
+    ...(produtor ? ABAS_EMISSAO : []),
+    ['produtores', 'Produtores'],
+    ...(usuario.admin ? [['admin', 'Administração']] : []),
+  ];
+  const [aba, setAba] = React.useState(() => abas.find(([a]) => `#${a}` === window.location.hash)?.[0] ?? (produtor ? 'emitir' : 'produtores'));
+  const [emissor, setEmissor] = React.useState(null);
+  const [erroEmissor, setErroEmissor] = React.useState('');
+  const [produtos, setProdutos] = React.useState(null);
+  const [trocandoSenha, setTrocandoSenha] = React.useState(false);
+  const abaValida = abas.some(([a]) => a === aba) ? aba : abas[0][0];
+
+  const trocarAba = (a) => {
+    setAba(a);
+    history.replaceState(null, '', a === 'emitir' ? '#' : `#${a}`);
+  };
+
+  React.useEffect(() => {
+    if (!produtor) return;
+    api.emissor().then(setEmissor).catch((e) => setErroEmissor(e.message));
+  }, [produtor]);
+
+  const carregarProdutos = React.useCallback(() => api.produtos().then(setProdutos).catch(() => setProdutos(null)), []);
+  React.useEffect(() => { if (produtor) carregarProdutos(); }, [produtor, carregarProdutos]);
+
+  const aoSelecionarProdutor = (p) => {
+    history.replaceState(null, '', '#');
+    onEstado({ ...estado, produtor: p, aviso: null });
+  };
+
+  return (
     <div className="app">
       <header className="topo">
         <div className="marca">
           <div className="logo">NF</div>
           <div>
             <h1>Emissor NF-e</h1>
-            <span>Modelo 55 · {emissor ? `SEFAZ-${emissor.uf}` : '…'}</span>
+            <span>Modelo 55 · SEFAZ-{estado.uf ?? 'GO'}</span>
           </div>
-          {homologacao && <span className="selo-ambiente" title="As notas não têm valor fiscal">HOMOLOGAÇÃO</span>}
+          <span className="selo-ambiente" title="As notas não têm valor fiscal">HOMOLOGAÇÃO</span>
         </div>
         <nav className="abas" role="tablist">
-          <button type="button" role="tab" aria-selected={aba === 'emitir'} className={aba === 'emitir' ? 'ativa' : ''} onClick={() => trocarAba('emitir')}>Emitir nota</button>
-          <button type="button" role="tab" aria-selected={aba === 'notas'} className={aba === 'notas' ? 'ativa' : ''} onClick={() => trocarAba('notas')}>Notas emitidas</button>
+          {abas.map(([a, rotulo]) => (
+            <button key={a} type="button" role="tab" aria-selected={abaValida === a} className={abaValida === a ? 'ativa' : ''} onClick={() => trocarAba(a)}>{rotulo}</button>
+          ))}
         </nav>
         <div className="topo-direita">
-          {emissor && (
-            <div className="certificado" title={`Emitido por ${emissor.certificado.emissor}`}>
-              <span>🔐 {emissor.certificado.titular}</span>
-              <small>{emissor.certificado.tipo} · válido até {new Date(emissor.certificado.validoAte).toLocaleDateString('pt-BR')}</small>
-            </div>
+          {produtor ? (
+            <button type="button" className="produtor-atual" onClick={() => trocarAba('produtores')} title="Trocar de produtor">
+              <span>🔐 {produtor.titular}</span>
+              <small>{produtor.tipo} {formatarDoc(produtor.documento)} · trocar</small>
+            </button>
+          ) : (
+            <span className="produtor-atual sem-produtor">Nenhum produtor selecionado</span>
           )}
-          <StatusSefaz />
+          {produtor && <StatusSefaz />}
+          <MenuUsuario usuario={usuario} onSenha={() => setTrocandoSenha(true)} onSair={onSair} />
         </div>
       </header>
 
-      {emissor?.simulada && (
+      {estado.simulada && (
         <div className="faixa-simulada">SEFAZ SIMULADA — modo de teste da interface. Nada é enviado à SEFAZ e as “autorizações” são fictícias.</div>
       )}
-      {erroEmissor && <div className="faixa-erro">Não foi possível falar com a API local: {erroEmissor}. Ela está rodando (npm run dev)?</div>}
+      {estado.aviso && <div className="faixa-erro">{estado.aviso}</div>}
+      {erroEmissor && <div className="faixa-erro">Não foi possível carregar o produtor: {erroEmissor}</div>}
 
-      {aba === 'notas' ? (
-        <Notas emissor={emissor} />
-      ) : (
-        <>
-          <div className="barra-acoes">
-            <div>
-              <h2>Nota fiscal nº {nota.ide.nNF || '—'} <small>série {nota.ide.serie}</small></h2>
-              <span>Rascunho salvo automaticamente neste navegador</span>
-            </div>
-            <div className="barra-botoes">
-              <button type="button" className="btn-texto" onClick={() => { setNota((n) => exemploSoja(n)); setResultado(null); }}>Carregar exemplo (soja)</button>
-              <button type="button" className="btn-secundario" onClick={novaNota}>Nova nota</button>
-            </div>
-          </div>
-
-          <main className="conteudo">
-            <div className="formulario">
-              <Identificacao nota={nota} set={set} onSerie={(s) => sugerirNumero(s, true)} />
-              <Emitente nota={nota} set={set} certificado={emissor?.certificado} onSalvarPadrao={salvarEmitentePadrao} salvo={emitenteSalvo} />
-              <Destinatario nota={nota} set={set} homologacao={homologacao} />
-              <Itens nota={nota} set={set} />
-              <Pagamento nota={nota} set={set} vNF={totais.vNF} />
-            </div>
-            <Resumo
-              totais={totais} pendencias={listaPendencias} avisos={listaAvisos} ocupado={ocupado} resultado={resultado}
-              onValidar={() => executar('validar')} onEmitir={() => executar('emitir')} onPrevia={() => executar('previa')}
-              onVerNotas={() => trocarAba('notas')} onNovaNota={novaNota}
-            />
-          </main>
-        </>
+      {abaValida === 'emitir' && produtor && (
+        <Emissao produtor={produtor} emissor={emissor} onVerNotas={() => trocarAba('notas')} produtos={produtos} carregarProdutos={carregarProdutos} />
       )}
+      {abaValida === 'notas' && <Notas emissor={emissor} />}
+      {abaValida === 'produtos' && <Produtos onAlterados={carregarProdutos} />}
+      {abaValida === 'produtores' && (
+        <Produtores
+          usuario={usuario} produtorAtivo={produtor?.id} primeiraVez={!produtor}
+          onSelecionado={aoSelecionarProdutor}
+          onAlterados={(removido) => { if (removido && removido === produtor?.id) onEstado({ ...estado, produtor: null }); }}
+        />
+      )}
+      {abaValida === 'admin' && <Admin usuario={usuario} />}
+      {trocandoSenha && <JanelaSenha onFechar={() => setTrocandoSenha(false)} />}
     </div>
   );
+}
+
+export default function App() {
+  const [estado, setEstado] = React.useState(null);
+  const [erro, setErro] = React.useState('');
+  const [avisoLogin, setAvisoLogin] = React.useState('');
+
+  const carregar = React.useCallback(() => {
+    api.estado().then((e) => { setEstado(e); setErro(''); }).catch((e) => setErro(e.message));
+  }, []);
+  React.useEffect(() => { carregar(); }, [carregar]);
+
+  // Sessão expirada (401) → login; produtor indisponível (409) → recarrega o estado.
+  React.useEffect(() => {
+    const ouvir = (e) => {
+      if (e.detail.status === 401) {
+        setEstado((s) => (s ? { ...s, usuario: null, produtor: null } : s));
+        setAvisoLogin('Sua sessão terminou. Entre novamente.');
+      } else {
+        carregar();
+      }
+    };
+    window.addEventListener(EVENTO_SESSAO, ouvir);
+    return () => window.removeEventListener(EVENTO_SESSAO, ouvir);
+  }, [carregar]);
+
+  async function sair() {
+    await api.sair().catch(() => {});
+    setAvisoLogin('');
+    setEstado((s) => ({ ...s, usuario: null, produtor: null }));
+    history.replaceState(null, '', '#');
+  }
+
+  const entrou = (e) => { setAvisoLogin(''); setEstado(e); };
+
+  if (erro) {
+    return <div className="faixa-erro">Não foi possível falar com a API local: {erro}. Ela está rodando (npm run dev)?</div>;
+  }
+  if (!estado) return <div className="carregando-tela">Carregando…</div>;
+  if (!estado.configurado) return <TelaConfiguracao onConfigurado={entrou} />;
+  if (!estado.usuario) return <TelaLogin onEntrou={entrou} aviso={avisoLogin} />;
+  // A chave remonta tudo ao trocar de usuário ou produtor (nada de dados misturados na tela).
+  return <Principal key={`${estado.usuario.id}-${estado.produtor?.id ?? 'nenhum'}`} estado={estado} onEstado={setEstado} onSair={sair} />;
 }

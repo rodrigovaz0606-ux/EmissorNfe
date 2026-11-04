@@ -7,3 +7,8 @@ data/
 dist/
 node_modules/
 saida/
+
+# Rust
+backend/target/
+# certificados FICTÍCIOS de teste (autoassinados, não são de ninguém)
+!backend/tests/fixtures/*.pfx

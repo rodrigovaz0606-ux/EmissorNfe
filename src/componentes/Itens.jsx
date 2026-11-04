@@ -1,11 +1,25 @@
 import React from 'react';
-import { Secao, Campo, Selecao } from './campos.jsx';
-import { CFOPS, UNIDADES, ORIGENS, CST_ICMS, CST_PIS_COFINS } from '../opcoes.js';
-import { itemVazio, totaisItem, moeda, num, digitos } from '../modelo.js';
+import { Secao, Campo } from './campos.jsx';
+import { Tributos } from './Tributos.jsx';
+import { CFOPS, UNIDADES } from '../opcoes.js';
+import { itemVazio, totaisItem, moeda, num, digitos, itemDoProduto, produtoDoItem, itemEstaVazio } from '../modelo.js';
 
-function ItemCartao({ item, indice, aberto, onAlternar, onChange, onRemover, podeRemover }) {
+function ItemCartao({ item, indice, aberto, onAlternar, onChange, onRemover, podeRemover, onSalvarProduto }) {
   const s = (campo) => (v) => onChange({ ...item, [campo]: v });
-  const sImp = (grupo, campo) => (v) => onChange({ ...item, [grupo]: { ...item[grupo], [campo]: v } });
+  const [salvando, setSalvando] = React.useState(false);
+  const [aviso, setAviso] = React.useState(null);
+
+  async function salvarProduto() {
+    setSalvando(true);
+    setAviso(null);
+    try {
+      setAviso({ ok: true, texto: await onSalvarProduto(item) });
+    } catch (e) {
+      setAviso({ ok: false, texto: e.message });
+    } finally {
+      setSalvando(false);
+    }
+  }
   const t = totaisItem(item);
   const decimal = (v) => (v === '' || Number.isFinite(num(v)) ? undefined : 'Número inválido');
 
@@ -43,54 +57,60 @@ function ItemCartao({ item, indice, aberto, onAlternar, onChange, onRemover, pod
             <Campo rotulo="Frete" valor={item.vFrete} onChange={s('vFrete')} largura="p" inputMode="decimal" placeholder="0,00" erro={decimal(item.vFrete)} />
           </div>
 
-          <div className="tributos">
-            <div className="tributo">
-              <h4>ICMS</h4>
-              <Selecao rotulo="Origem" valor={item.icms.orig} onChange={sImp('icms', 'orig')} opcoes={ORIGENS} largura="cheia" />
-              <Selecao rotulo="Situação tributária" valor={item.icms.CST} onChange={sImp('icms', 'CST')} opcoes={CST_ICMS} largura="cheia" />
-              {item.icms.CST === '00' && (
-                <Campo rotulo="Alíquota %" valor={item.icms.pICMS} onChange={sImp('icms', 'pICMS')} largura="cheia" inputMode="decimal" obrigatorio
-                  erro={!(num(item.icms.pICMS) >= 0) && 'Informe a alíquota'} dica={`ICMS: ${moeda(t.vICMS)}`} />
-              )}
-            </div>
-            <div className="tributo">
-              <h4>PIS</h4>
-              <Selecao rotulo="Situação tributária" valor={item.pis.CST} onChange={sImp('pis', 'CST')} opcoes={CST_PIS_COFINS} largura="cheia" />
-              {['01', '02'].includes(item.pis.CST) && (
-                <Campo rotulo="Alíquota %" valor={item.pis.pPIS} onChange={sImp('pis', 'pPIS')} largura="cheia" inputMode="decimal" obrigatorio
-                  erro={!(num(item.pis.pPIS) >= 0) && 'Informe a alíquota'} dica={`PIS: ${moeda(t.vPIS)}`} />
-              )}
-            </div>
-            <div className="tributo">
-              <h4>COFINS</h4>
-              <Selecao rotulo="Situação tributária" valor={item.cofins.CST} onChange={sImp('cofins', 'CST')} opcoes={CST_PIS_COFINS} largura="cheia" />
-              {['01', '02'].includes(item.cofins.CST) && (
-                <Campo rotulo="Alíquota %" valor={item.cofins.pCOFINS} onChange={sImp('cofins', 'pCOFINS')} largura="cheia" inputMode="decimal" obrigatorio
-                  erro={!(num(item.cofins.pCOFINS) >= 0) && 'Informe a alíquota'} dica={`COFINS: ${moeda(t.vCOFINS)}`} />
-              )}
-            </div>
-          </div>
+          <Tributos item={item} onChange={onChange} valores={{ vICMS: moeda(t.vICMS), vPIS: moeda(t.vPIS), vCOFINS: moeda(t.vCOFINS) }} />
 
           <div className="grade">
             <Campo rotulo="Informações adicionais do item" valor={item.infAdProd} onChange={s('infAdProd')} largura="cheia" />
           </div>
 
-          {podeRemover && (
-            <div className="item-rodape">
-              <button type="button" className="btn-perigo-texto" onClick={onRemover}>Remover item</button>
-            </div>
-          )}
+          {aviso && <div className={`aviso-local ${aviso.ok ? 'ok' : 'falha'}`}>{aviso.texto}</div>}
+          <div className="item-rodape">
+            <button type="button" className="btn-texto" onClick={salvarProduto} disabled={salvando}
+              title="Grava código, descrição, NCM, CFOP, unidade, preço e tributação no cadastro de produtos">
+              {salvando ? 'Salvando…' : 'Salvar no cadastro de produtos'}
+            </button>
+            {podeRemover && <button type="button" className="btn-perigo-texto" onClick={onRemover}>Remover item</button>}
+          </div>
         </div>
       )}
     </div>
   );
 }
 
-export function Itens({ nota, set }) {
+// Escolha de um produto cadastrado para virar item da nota.
+function EscolherProduto({ produtos, onEscolher }) {
+  const id = React.useId();
+  if (!produtos) return null;
+  return (
+    <div className="campo escolher-produto">
+      <label className="rotulo" htmlFor={id}>Produto cadastrado</label>
+      <select
+        id={id} value="" disabled={produtos.length === 0}
+        onChange={(e) => { const p = produtos.find((x) => String(x.id) === e.target.value); if (p) onEscolher(p); }}
+      >
+        <option value="">{produtos.length === 0 ? 'Nenhum produto cadastrado' : 'Adicionar da lista…'}</option>
+        {produtos.map((p) => <option key={p.id} value={p.id}>{p.xProd} ({p.cProd})</option>)}
+      </select>
+    </div>
+  );
+}
+
+export function Itens({ nota, set, produtos, onSalvarProduto }) {
   const [aberto, setAberto] = React.useState(0);
   const itens = nota.itens;
   const atualizar = (i) => (novo) => set(['itens'], itens.map((it, j) => (j === i ? novo : it)));
 
+  function adicionarDoCadastro(produto) {
+    const novo = itemDoProduto(produto);
+    // Nota recém-aberta com um único item em branco: substitui em vez de acrescentar.
+    if (itens.length === 1 && itemEstaVazio(itens[0])) {
+      set(['itens'], [novo]);
+      setAberto(0);
+    } else {
+      set(['itens'], [...itens, novo]);
+      setAberto(itens.length);
+    }
+  }
   function adicionar() {
     // Novo item herda a tributação e o CFOP do último (costuma ser igual).
     const ultimo = itens.at(-1);
@@ -101,8 +121,13 @@ export function Itens({ nota, set }) {
 
   return (
     <Secao
-      id="itens" numero="4" titulo="Produtos" descricao={`${itens.length} ${itens.length === 1 ? 'item' : 'itens'}`}
-      acoes={<button type="button" className="btn-secundario" onClick={adicionar}>+ Adicionar item</button>}
+      id="itens" numero="4" titulo="Itens da nota" descricao={`${itens.length} ${itens.length === 1 ? 'item' : 'itens'}`}
+      acoes={(
+        <div className="acoes-itens">
+          <EscolherProduto produtos={produtos} onEscolher={adicionarDoCadastro} />
+          <button type="button" className="btn-secundario" onClick={adicionar}>+ Item em branco</button>
+        </div>
+      )}
     >
       <datalist id="cfops">{CFOPS.map(([c, d]) => <option key={c} value={c}>{d}</option>)}</datalist>
       <datalist id="unidades">{UNIDADES.map((u) => <option key={u} value={u} />)}</datalist>
@@ -114,6 +139,7 @@ export function Itens({ nota, set }) {
             onChange={atualizar(i)}
             onRemover={() => { set(['itens'], itens.filter((_, j) => j !== i)); setAberto(-1); }}
             podeRemover={itens.length > 1}
+            onSalvarProduto={(it) => onSalvarProduto(produtoDoItem(it))}
           />
         ))}
       </div>
