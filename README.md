@@ -24,6 +24,12 @@ Abra http://localhost:5175. A API (Rust) fica em http://localhost:3335 e só ace
 - Busca de endereço pelo CEP (ViaCEP), que também preenche o código IBGE do município
 - **Validar**: gera, assina e confere o XML no XSD, sem enviar. **Emitir**: envia para a SEFAZ em homologação
 - **Produtos**: cadastro (código, descrição, NCM, CFOP, unidade, preço e tributação) salvo no SQLite; na nota, escolha o produto em "Produto cadastrado" para preencher o item, ou salve um item digitado com "Salvar no cadastro de produtos"
+- **Clientes**: cadastro de destinatários; na nota, escolha em "Cliente cadastrado" ou salve o destinatário digitado
+- **Tipo de nota**: modelos de venda, remessa, devolução e entrada que preenchem natureza, CFOP e pagamento (confira com o contador se servem para a sua operação). Devolução e complementar pedem a chave da NF-e referenciada
+- **Painel**: total autorizado no mês, notas por situação, valor dos últimos 6 meses e certificados que vencem em até 30 dias
+- **Duplicar nota**: abre uma nota nova com os dados de uma antiga e o próximo número livre
+- **Filtros** em Notas emitidas (período, situação, número, destinatário, CPF/CNPJ ou chave)
+- **Exportar para o contador**: ZIP com os XMLs do período (notas autorizadas, canceladas e denegadas, eventos e inutilizações) e um `resumo.csv` que abre no Excel
 - Notas emitidas: DANFE em PDF, XML, carta de correção, cancelamento, consulta e inutilização
 - O rascunho e o emitente padrão ficam salvos no navegador (localStorage)
 
@@ -99,7 +105,8 @@ Os comandos chamam o binário `emissor-nfe` (`cargo run -- <comando>`); ele tamb
 | `danfe/` | DANFE em PDF (Code-128, várias folhas, marcas d'água) |
 | `db.rs`, `emissao.rs`, `servidor.rs` | SQLite (com migrações), regras de emissão/eventos e API HTTP (axum) |
 | `auth.rs`, `contas.rs`, `cofre.rs` | Login (Argon2id, sessões, bloqueio), usuários, produtores e cofre AES-256-GCM dos certificados |
-| `produtos.rs` | Cadastro de produtos (validação; código único) |
+| `produtos.rs`, `clientes.rs` | Cadastros de produtos e clientes (validação; código ou documento único por produtor) |
+| `relatorios.rs` | Painel e exportação em ZIP para o contador |
 
 O validador XSD foi comparado com a libxml2 em 1.283 documentos adulterados (elementos removidos, duplicados e valores inválidos). Os veredictos coincidiram em todos, exceto 3 casos de base64 inválido no certificado, em que o validador próprio é mais rígido. As assinaturas também foram conferidas por outra implementação (xml-crypto).
 
@@ -112,6 +119,7 @@ O validador XSD foi comparado com a libxml2 em 1.283 documentos adulterados (ele
 - [x] Backend reescrito em Rust (mesma API; bancos SQLite existentes continuam valendo)
 - [x] Cadastro de produtos
 - [x] Login, usuários, administrador e vários produtores (certificados cifrados)
+- [x] Clientes, duplicar nota, filtros, exportação para o contador, painel e tipos de nota
 - [ ] Autorização real (cStat 100): precisa de um e-CNPJ com IE em GO (a SEFAZ-GO rejeita emitente CPF com 407)
 - [ ] Atualizar schemas para o PL_010 (reforma tributária: IBS/CBS)
 - [ ] Cadeia ICP-Brasil em `NFE_CA_BUNDLE` para verificar o certificado do servidor da SEFAZ

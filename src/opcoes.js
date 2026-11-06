@@ -8,18 +8,40 @@ export const NATUREZAS = [
   'REMESSA PARA DEPOSITO FECHADO OU ARMAZEM GERAL',
   'REMESSA PARA INDUSTRIALIZACAO',
   'DEVOLUCAO DE COMPRA',
+  'DEVOLUCAO DE VENDA',
+  'COMPRA PARA PRODUCAO RURAL',
   'OUTRA SAIDA NAO ESPECIFICADA',
 ];
 
 export const CFOPS = [
   ['5101', 'Venda de produção do estabelecimento'],
   ['5102', 'Venda de mercadoria adquirida de terceiros'],
+  ['5201', 'Devolução de compra para produção rural ou industrialização'],
+  ['5901', 'Remessa para industrialização'],
   ['5905', 'Remessa para depósito fechado ou armazém geral'],
   ['5949', 'Outra saída não especificada'],
   ['6101', 'Venda de produção (interestadual)'],
   ['6102', 'Venda de mercadoria de terceiros (interestadual)'],
+  ['6201', 'Devolução de compra (interestadual)'],
+  ['6901', 'Remessa para industrialização (interestadual)'],
   ['6905', 'Remessa para depósito (interestadual)'],
   ['6949', 'Outra saída (interestadual)'],
+  ['1101', 'Compra para produção rural ou industrialização'],
+  ['2101', 'Compra para produção rural (interestadual)'],
+  ['1201', 'Entrada: devolução de venda de produção própria'],
+  ['2201', 'Entrada: devolução de venda (interestadual)'],
+];
+
+// Modelos de operação: preenchem natureza, tipo, finalidade, CFOP (interno, interestadual) e pagamento.
+// São um ponto de partida: o CFOP e a tributação de cada operação devem ser conferidos com o contador.
+export const TIPOS_NOTA = [
+  { id: 'venda_producao', rotulo: 'Venda de produção própria', natOp: 'VENDA DE PRODUCAO DO ESTABELECIMENTO', tpNF: '1', finNFe: '1', cfop: ['5101', '6101'], venda: true },
+  { id: 'venda_terceiros', rotulo: 'Venda de mercadoria de terceiros', natOp: 'VENDA DE MERCADORIA ADQUIRIDA DE TERCEIROS', tpNF: '1', finNFe: '1', cfop: ['5102', '6102'], venda: true },
+  { id: 'remessa_deposito', rotulo: 'Remessa para depósito ou armazém', natOp: 'REMESSA PARA DEPOSITO FECHADO OU ARMAZEM GERAL', tpNF: '1', finNFe: '1', cfop: ['5905', '6905'], semPagamento: true },
+  { id: 'remessa_industrializacao', rotulo: 'Remessa para industrialização', natOp: 'REMESSA PARA INDUSTRIALIZACAO', tpNF: '1', finNFe: '1', cfop: ['5901', '6901'], semPagamento: true },
+  { id: 'devolucao_compra', rotulo: 'Devolução de compra (saída)', natOp: 'DEVOLUCAO DE COMPRA', tpNF: '1', finNFe: '4', cfop: ['5201', '6201'], semPagamento: true },
+  { id: 'entrada_compra', rotulo: 'Entrada: compra para produção rural', natOp: 'COMPRA PARA PRODUCAO RURAL', tpNF: '0', finNFe: '1', cfop: ['1101', '2101'] },
+  { id: 'entrada_devolucao', rotulo: 'Entrada: devolução de venda', natOp: 'DEVOLUCAO DE VENDA', tpNF: '0', finNFe: '4', cfop: ['1201', '2201'], semPagamento: true },
 ];
 
 export const UNIDADES = ['UN', 'KG', 'SC', 'TON', 'CX', 'L', 'M', 'M3', 'CB'];

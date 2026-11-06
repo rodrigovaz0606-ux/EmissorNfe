@@ -1,7 +1,34 @@
 import React from 'react';
 import { Secao, Campo, Selecao } from './campos.jsx';
-import { NATUREZAS, TP_NF, FIN_NFE, IND_FINAL, IND_PRES } from '../opcoes.js';
-import { idDestDe } from '../modelo.js';
+import { NATUREZAS, TP_NF, FIN_NFE, IND_FINAL, IND_PRES, TIPOS_NOTA } from '../opcoes.js';
+import { idDestDe, aplicarTipoNota, aceitaReferencia, precisaReferencia, digitos } from '../modelo.js';
+
+const OPCOES_TIPO = [...TIPOS_NOTA.map((t) => [t.id, t.rotulo]), ['', 'Personalizada']];
+
+// Chaves das notas referenciadas (devolução, complementar, ajuste).
+function Referencias({ nota, set }) {
+  const lista = nota.ide.refNFe?.length ? nota.ide.refNFe : [''];
+  const mudar = (i) => (v) => set(['ide', 'refNFe'], lista.map((r, j) => (j === i ? v : r)));
+  return (
+    <div className="referencias">
+      <h3 className="subtitulo">Notas referenciadas</h3>
+      {lista.map((r, i) => (
+        <div className="grade linha-pagamento" key={i}>
+          <Campo
+            rotulo={lista.length === 1 ? 'Chave da NF-e referenciada' : `Chave da NF-e referenciada ${i + 1}`} valor={r} onChange={mudar(i)} largura="g"
+            inputMode="numeric" obrigatorio={precisaReferencia(nota) && i === 0} placeholder="44 dígitos"
+            erro={digitos(r).length !== 44 && (r || precisaReferencia(nota)) ? `${digitos(r).length} de 44 dígitos` : undefined}
+            dica="A chave da nota original aparece no DANFE e no XML"
+          />
+          {lista.length > 1 && (
+            <button type="button" className="btn-icone" title="Remover" onClick={() => set(['ide', 'refNFe'], lista.filter((_, j) => j !== i))}>✕</button>
+          )}
+        </div>
+      ))}
+      <button type="button" className="btn-texto" onClick={() => set(['ide', 'refNFe'], [...lista, ''])}>+ Outra nota referenciada</button>
+    </div>
+  );
+}
 
 export function Identificacao({ nota, set, onSerie }) {
   const ide = nota.ide;
@@ -10,6 +37,10 @@ export function Identificacao({ nota, set, onSerie }) {
   return (
     <Secao id="identificacao" numero="1" titulo="Identificação" descricao="Dados gerais da operação">
       <div className="grade">
+        <Selecao
+          rotulo="Tipo de nota" valor={ide.tipoNota ?? ''} onChange={(id) => set([], aplicarTipoNota(nota, id))} opcoes={OPCOES_TIPO} largura="cheia"
+          dica="Preenche natureza, CFOP e pagamento. Confira com o seu contador se servem para a sua operação."
+        />
         <Campo
           rotulo="Natureza da operação" valor={ide.natOp} onChange={(v) => s('natOp')(v.toUpperCase())} largura="g" obrigatorio
           lista="naturezas" erro={!ide.natOp.trim() && 'Informe a natureza da operação'}
@@ -29,6 +60,7 @@ export function Identificacao({ nota, set, onSerie }) {
           <span className="dica">Calculado pelas UFs do emitente e do destinatário</span>
         </div>
       </div>
+      {aceitaReferencia(nota) && <Referencias nota={nota} set={set} />}
     </Secao>
   );
 }

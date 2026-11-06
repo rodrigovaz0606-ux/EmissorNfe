@@ -1,7 +1,10 @@
 // A tela e o XML precisam calcular igual: monta a mesma nota pelos dois caminhos (tela em JS, XML no backend Rust).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { notaVazia, itemVazio, paraPayload, totaisNota, pendencias, centavos, itemDoProduto, produtoDoItem } from './modelo.js';
+import {
+  notaVazia, itemVazio, paraPayload, totaisNota, pendencias, avisos, centavos, itemDoProduto, produtoDoItem,
+  aplicarTipoNota, cfopDoTipo, notaDoPayload, destDoCliente,
+} from './modelo.js';
 import { execFileSync } from 'node:child_process';
 
 // Gera o XML pelo backend em Rust (comando gerar-xml), a partir do mesmo payload que a tela envia.
@@ -78,4 +81,58 @@ test('produto do cadastro vira item da nota e volta igual', () => {
   assert.deepEqual(item.icms, produto.icms);
   const { id, ...semId } = produto;
   assert.deepEqual(produtoDoItem(item), semId);
+});
+
+test('duplicar: os dados guardados voltam para o formulário e geram o mesmo payload', () => {
+  const n = notaCompleta();
+  n.ide.nNF = '12';
+  const payload = JSON.parse(JSON.stringify(paraPayload(n)));
+  const copia = notaDoPayload(payload, n);
+  assert.equal(copia.ide.nNF, '', 'o número fica para a tela sugerir');
+  assert.equal(copia.itens[1].vUnCom, '58,4');
+  assert.equal(copia.ide.tipoNota, 'venda_producao');
+  copia.ide.nNF = '12';
+  assert.deepEqual(JSON.parse(JSON.stringify(paraPayload(copia))), payload);
+  assert.deepEqual(pendencias(copia), []);
+});
+
+test('tipo de nota: devolução exige referência, muda CFOP e tira o pagamento', () => {
+  const n = aplicarTipoNota(notaCompleta(), 'devolucao_compra');
+  assert.equal(n.ide.finNFe, '4');
+  assert.equal(n.ide.natOp, 'DEVOLUCAO DE COMPRA');
+  assert.deepEqual(n.itens.map((i) => i.CFOP), ['5201', '5201']);
+  assert.deepEqual(n.pag, [{ tPag: '90', vPag: '' }]);
+  assert.ok(pendencias(n).includes('Chave da NF-e referenciada'));
+
+  n.ide.refNFe = ['123'];
+  assert.ok(pendencias(n).some((p) => p.includes('44 dígitos')));
+  n.ide.refNFe = ['5226 1112 3456 7800 0195 5500 1000 0000 0114 8201 7365'];
+  assert.ok(!pendencias(n).some((p) => p.includes('referenciada')));
+  assert.deepEqual(paraPayload(n).ide.refNFe, ['52261112345678000195550010000000011482017365']);
+  assert.deepEqual(avisos(n), []);
+
+  // voltando para venda, a referência não vai no payload e o pagamento volta
+  const venda = aplicarTipoNota(n, 'venda_producao');
+  assert.equal(paraPayload(venda).ide.refNFe, undefined);
+  assert.equal(venda.pag[0].tPag, '01');
+});
+
+test('tipo de nota: entrada e operação interestadual usam o CFOP certo', () => {
+  const n = aplicarTipoNota(notaCompleta(), 'entrada_compra');
+  assert.equal(n.ide.tpNF, '0');
+  assert.equal(n.itens[0].CFOP, '1101');
+  assert.deepEqual(avisos(n), []);
+  n.dest.ender.UF = 'SP';
+  assert.equal(cfopDoTipo(n), '2101');
+  assert.ok(avisos(n).some((a) => a.includes('2xxx')));
+  assert.equal(aplicarTipoNota(n, 'entrada_compra').itens[0].CFOP, '2101');
+  assert.equal(aplicarTipoNota(n, '').ide.tipoNota, '');
+});
+
+test('cliente do cadastro vira destinatário sem o id', () => {
+  const d = destDoCliente({ id: 3, tipo: 'PJ', CNPJ: '12345678000195', xNome: 'X', indIEDest: '1', IE: '10', ender: { xLgr: 'RUA' } });
+  assert.equal(d.id, undefined);
+  assert.equal(d.tipo, 'PJ');
+  assert.equal(d.ender.xLgr, 'RUA');
+  assert.equal(d.ender.UF, 'GO');
 });

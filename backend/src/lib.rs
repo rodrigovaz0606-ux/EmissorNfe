@@ -1,5 +1,6 @@
 //! Emissor de NF-e modelo 55 direto na SEFAZ (homologação).
 pub mod auth;
+pub mod clientes;
 pub mod cofre;
 pub mod contas;
 pub mod danfe;
@@ -8,6 +9,7 @@ pub mod emissao;
 pub mod exemplo;
 pub mod fiscal;
 pub mod produtos;
+pub mod relatorios;
 pub mod servidor;
 pub mod simulada;
 

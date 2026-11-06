@@ -132,6 +132,20 @@ DROP TABLE produtos;
 ALTER TABLE produtos_novo RENAME TO produtos;
 ";
 
+/// Migração 2: cadastro de clientes (destinatários) por produtor.
+const MIGRACAO_2: &str = "
+CREATE TABLE clientes (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  produtor_id   INTEGER NOT NULL REFERENCES produtores(id),
+  documento     TEXT NOT NULL,          -- CPF ou CNPJ, só os dígitos
+  xNome         TEXT NOT NULL,
+  dados_json    TEXT NOT NULL,          -- mesmo formato do destinatário do formulário
+  criado_em     TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+  alterado_em   TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+  UNIQUE (produtor_id, documento)
+);
+";
+
 /// Números "consumidos": notas que a SEFAZ registrou (autorizadas, canceladas, denegadas)
 /// e faixas inutilizadas. Número de nota rejeitada pode ser reutilizado.
 const STATUS_QUE_CONSOMEM: &str = "('autorizada', 'cancelada', 'denegada')";
@@ -250,9 +264,70 @@ pub struct CertificadoProdutor<'a> {
     pub senha_cifrada: &'a [u8],
 }
 
+/// Filtros da lista de notas (tudo opcional).
+#[derive(Debug, Default, Clone)]
+pub struct FiltroNotas {
+    /// Datas no formato AAAA-MM-DD (inclusive).
+    pub de: Option<String>,
+    pub ate: Option<String>,
+    pub status: Option<String>,
+    /// Número da nota, nome ou CPF/CNPJ do destinatário, ou chave.
+    pub busca: Option<String>,
+}
+
+/// Nota que entra na exportação para o contador.
+#[derive(Debug, Clone)]
+pub struct NotaExportada {
+    pub chave: String,
+    pub serie: i64,
+    pub n_nf: i64,
+    pub status: String,
+    pub v_nf: String,
+    pub dest_doc: Option<String>,
+    pub dest_nome: Option<String>,
+    pub n_prot: Option<String>,
+    pub criada_em: String,
+    pub xml_nfe: String,
+    pub xml_proc: Option<String>,
+}
+
+/// Evento registrado ou inutilização homologada, para a exportação.
+#[derive(Debug, Clone)]
+pub struct DocumentoExportado {
+    pub nome: String,
+    pub xml: String,
+}
+
+/// Contagem e valor (em centavos) das notas de um período.
+#[derive(Debug, Default, Clone, serde::Serialize)]
+pub struct ResumoPeriodo {
+    pub autorizadas: i64,
+    pub canceladas: i64,
+    pub rejeitadas: i64,
+    pub pendentes: i64,
+    pub denegadas: i64,
+    pub valor_autorizado: i64,
+}
+
 pub struct Repositorio {
     db: Connection,
 }
+
+/// Escapa % e _ para usar o texto digitado em LIKE ... ESCAPE '\\'.
+fn padrao_like(texto: &str) -> String {
+    let mut p = String::from("%");
+    for c in texto.chars() {
+        if matches!(c, '%' | '_' | '\\') {
+            p.push('\\');
+        }
+        p.push(c);
+    }
+    p.push('%');
+    p
+}
+
+/// Valor em centavos, sem somar frações de real em ponto flutuante.
+const CENTAVOS_SQL: &str = "CAST(ROUND(CAST(vNF AS REAL) * 100) AS INTEGER)";
 
 const CAMPOS_USUARIO: &str = "id, login, nome, senha_hash, admin, ativo";
 fn usuario_de(r: &Row) -> rusqlite::Result<Usuario> {
@@ -320,6 +395,9 @@ impl Repositorio {
             db.execute_batch(&format!("BEGIN; {MIGRACAO_1} PRAGMA user_version = 1; COMMIT;"))?;
             db.pragma_update(None, "foreign_keys", "ON")?;
         }
+        if versao < 2 {
+            db.execute_batch(&format!("BEGIN; {MIGRACAO_2} PRAGMA user_version = 2; COMMIT;"))?;
+        }
         Ok(Repositorio { db })
     }
 
@@ -386,16 +464,49 @@ impl Repositorio {
         Ok(Some(Value::Object(m)))
     }
 
-    pub fn listar_notas(&self, produtor: i64, pagina: i64, limite: i64) -> Result<Value> {
-        let total: i64 = self.db.query_row("SELECT COUNT(*) FROM notas WHERE produtor_id = ?", [produtor], |r| r.get(0))?;
-        let notas = self.linhas(
-            "SELECT id, chave, serie, nNF, status, cStat, xMotivo, nProt, dhRecbto, vNF, dest_doc, dest_nome, criada_em,
-                    xml_proc IS NOT NULL AS tem_proc,
-                    (SELECT COUNT(*) FROM eventos e WHERE e.nota_id = notas.id AND e.tipo = 'cce' AND e.registrado = 1) AS cces
-             FROM notas WHERE produtor_id = ? ORDER BY id DESC LIMIT ? OFFSET ?",
-            params![produtor, limite, (pagina - 1) * limite],
+    pub fn listar_notas(&self, produtor: i64, filtro: &FiltroNotas, pagina: i64, limite: i64) -> Result<Value> {
+        let vazio = |v: &Option<String>| v.as_deref().map(str::trim).filter(|t| !t.is_empty()).map(String::from);
+        let busca = vazio(&filtro.busca);
+        let digitos = busca
+            .as_deref()
+            .filter(|b| !b.chars().any(char::is_alphabetic)) // nome com número não vira busca por documento
+            .map(|b| b.chars().filter(char::is_ascii_digit).collect::<String>())
+            .filter(|d| !d.is_empty());
+        let so_numero = busca.as_deref().is_some_and(|b| b.chars().all(|c| c.is_ascii_digit()));
+        let onde = "produtor_id = :produtor
+             AND (:de IS NULL OR date(criada_em) >= :de)
+             AND (:ate IS NULL OR date(criada_em) <= :ate)
+             AND (:status IS NULL OR status = :status)
+             AND (:busca IS NULL
+                  OR dest_nome LIKE :busca ESCAPE '\\'
+                  OR (:digitos IS NOT NULL AND (dest_doc LIKE :digitos ESCAPE '\\' OR chave LIKE :digitos ESCAPE '\\'))
+                  OR (:numero IS NOT NULL AND nNF = :numero))";
+        let numero = if so_numero { busca.as_deref().and_then(|b| b.parse::<i64>().ok()) } else { None };
+        let (de, ate, status) = (vazio(&filtro.de), vazio(&filtro.ate), vazio(&filtro.status));
+        let padrao_busca = busca.as_deref().map(padrao_like);
+        let padrao_digitos = digitos.as_deref().map(padrao_like);
+        let total: i64 = self.db.query_row(
+            &format!("SELECT COUNT(*) FROM notas WHERE {onde}"),
+            named_params! {
+                ":produtor": produtor, ":de": de, ":ate": ate, ":status": status,
+                ":busca": padrao_busca, ":digitos": padrao_digitos, ":numero": numero,
+            },
+            |r| r.get(0),
         )?;
-        Ok(serde_json::json!({ "total": total, "notas": notas }))
+        let notas = self.linhas(
+            &format!(
+                "SELECT id, chave, serie, nNF, status, cStat, xMotivo, nProt, dhRecbto, vNF, dest_doc, dest_nome, criada_em,
+                        xml_proc IS NOT NULL AS tem_proc,
+                        (SELECT COUNT(*) FROM eventos e WHERE e.nota_id = notas.id AND e.tipo = 'cce' AND e.registrado = 1) AS cces
+                 FROM notas WHERE {onde} ORDER BY id DESC LIMIT :limite OFFSET :inicio"
+            ),
+            named_params! {
+                ":produtor": produtor, ":de": de, ":ate": ate, ":status": status,
+                ":busca": padrao_busca, ":digitos": padrao_digitos, ":numero": numero,
+                ":limite": limite, ":inicio": (pagina - 1) * limite,
+            },
+        )?;
+        Ok(serde_json::json!({ "total": total, "pagina": pagina, "porPagina": limite, "notas": notas }))
     }
 
     pub fn marcar_cancelada(&self, id: i64) -> Result<()> {
@@ -553,6 +664,135 @@ impl Repositorio {
     /// Devolve false se o produto não existe.
     pub fn excluir_produto(&self, produtor: i64, id: i64) -> Result<bool> {
         Ok(self.db.execute("DELETE FROM produtos WHERE id = ? AND produtor_id = ?", [id, produtor])? > 0)
+    }
+
+    // ---------- clientes ----------
+
+    /// Clientes em ordem de nome; cada um é o JSON do cadastro com o `id`.
+    pub fn listar_clientes(&self, produtor: i64) -> Result<Vec<Value>> {
+        let mut st = self.db.prepare("SELECT id, dados_json FROM clientes WHERE produtor_id = ? ORDER BY xNome COLLATE NOCASE, documento")?;
+        let linhas = st.query_map([produtor], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+        let mut v = Vec::new();
+        for l in linhas {
+            let (id, dados) = l?;
+            let mut m = serde_json::from_str::<Map<String, Value>>(&dados).unwrap_or_default();
+            m.insert("id".into(), Value::from(id));
+            v.push(Value::Object(m));
+        }
+        Ok(v)
+    }
+
+    pub fn cliente_por_documento(&self, produtor: i64, documento: &str) -> Result<Option<i64>> {
+        Ok(self
+            .db
+            .query_row("SELECT id FROM clientes WHERE produtor_id = ? AND documento = ?", params![produtor, documento], |r| r.get(0))
+            .optional()?)
+    }
+
+    pub fn inserir_cliente(&self, produtor: i64, documento: &str, x_nome: &str, dados_json: &str) -> Result<i64> {
+        self.db.execute(
+            "INSERT INTO clientes (produtor_id, documento, xNome, dados_json) VALUES (?, ?, ?, ?)",
+            params![produtor, documento, x_nome, dados_json],
+        )?;
+        Ok(self.db.last_insert_rowid())
+    }
+
+    /// Devolve false se o cliente não existe (ou é de outro produtor).
+    pub fn atualizar_cliente(&self, produtor: i64, id: i64, documento: &str, x_nome: &str, dados_json: &str) -> Result<bool> {
+        let n = self.db.execute(
+            "UPDATE clientes SET documento = ?, xNome = ?, dados_json = ?, alterado_em = datetime('now', 'localtime')
+             WHERE id = ? AND produtor_id = ?",
+            params![documento, x_nome, dados_json, id, produtor],
+        )?;
+        Ok(n > 0)
+    }
+
+    pub fn excluir_cliente(&self, produtor: i64, id: i64) -> Result<bool> {
+        Ok(self.db.execute("DELETE FROM clientes WHERE id = ? AND produtor_id = ?", [id, produtor])? > 0)
+    }
+
+    // ---------- painel e exportação ----------
+
+    /// Resumo das notas com data de gravação entre `de` e `ate` (AAAA-MM-DD, inclusive).
+    pub fn resumo_periodo(&self, produtor: i64, de: &str, ate: &str) -> Result<ResumoPeriodo> {
+        Ok(self.db.query_row(
+            &format!(
+                "SELECT COALESCE(SUM(status = 'autorizada'), 0), COALESCE(SUM(status = 'cancelada'), 0),
+                        COALESCE(SUM(status = 'rejeitada'), 0), COALESCE(SUM(status = 'pendente'), 0),
+                        COALESCE(SUM(status = 'denegada'), 0),
+                        COALESCE(SUM(CASE WHEN status = 'autorizada' THEN {CENTAVOS_SQL} END), 0)
+                 FROM notas WHERE produtor_id = ? AND date(criada_em) BETWEEN ? AND ?"
+            ),
+            params![produtor, de, ate],
+            |r| {
+                Ok(ResumoPeriodo {
+                    autorizadas: r.get(0)?,
+                    canceladas: r.get(1)?,
+                    rejeitadas: r.get(2)?,
+                    pendentes: r.get(3)?,
+                    denegadas: r.get(4)?,
+                    valor_autorizado: r.get(5)?,
+                })
+            },
+        )?)
+    }
+
+    /// Notas com valor fiscal no período: autorizadas, canceladas e denegadas.
+    pub fn notas_para_exportar(&self, produtor: i64, de: &str, ate: &str) -> Result<Vec<NotaExportada>> {
+        let mut st = self.db.prepare(&format!(
+            "SELECT chave, serie, nNF, status, vNF, dest_doc, dest_nome, nProt, criada_em, xml_nfe, xml_proc FROM notas
+             WHERE produtor_id = ? AND date(criada_em) BETWEEN ? AND ? AND status IN {STATUS_QUE_CONSOMEM}
+             ORDER BY serie, nNF"
+        ))?;
+        let v = st
+            .query_map(params![produtor, de, ate], |r| {
+                Ok(NotaExportada {
+                    chave: r.get(0)?,
+                    serie: r.get(1)?,
+                    n_nf: r.get(2)?,
+                    status: r.get(3)?,
+                    v_nf: r.get(4)?,
+                    dest_doc: r.get(5)?,
+                    dest_nome: r.get(6)?,
+                    n_prot: r.get(7)?,
+                    criada_em: r.get(8)?,
+                    xml_nfe: r.get(9)?,
+                    xml_proc: r.get(10)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(v)
+    }
+
+    /// Eventos registrados no período (pela data do evento, não da nota).
+    pub fn eventos_para_exportar(&self, produtor: i64, de: &str, ate: &str) -> Result<Vec<DocumentoExportado>> {
+        let mut st = self.db.prepare(
+            "SELECT n.chave, e.tipo, e.nSeqEvento, e.xml_proc FROM eventos e JOIN notas n ON n.id = e.nota_id
+             WHERE n.produtor_id = ? AND date(e.criado_em) BETWEEN ? AND ? AND e.registrado = 1 AND e.xml_proc IS NOT NULL
+             ORDER BY e.id",
+        )?;
+        let v = st
+            .query_map(params![produtor, de, ate], |r| {
+                let (chave, tipo, seq): (String, String, i64) = (r.get(0)?, r.get(1)?, r.get(2)?);
+                Ok(DocumentoExportado { nome: format!("{chave}-{tipo}-{seq}.xml"), xml: r.get(3)? })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(v)
+    }
+
+    pub fn inutilizacoes_para_exportar(&self, produtor: i64, de: &str, ate: &str) -> Result<Vec<DocumentoExportado>> {
+        let mut st = self.db.prepare(
+            "SELECT serie, nNFIni, nNFFin, xml_proc FROM inutilizacoes
+             WHERE produtor_id = ? AND date(criado_em) BETWEEN ? AND ? AND homologada = 1 AND xml_proc IS NOT NULL
+             ORDER BY id",
+        )?;
+        let v = st
+            .query_map(params![produtor, de, ate], |r| {
+                let (serie, ini, fim): (i64, i64, i64) = (r.get(0)?, r.get(1)?, r.get(2)?);
+                Ok(DocumentoExportado { nome: format!("inutilizacao-serie{serie}-{ini}-{fim}.xml"), xml: r.get(3)? })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(v)
     }
 
     // ---------- usuários ----------

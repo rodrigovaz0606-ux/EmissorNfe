@@ -11,7 +11,7 @@
 
 #![allow(non_snake_case)]
 
-use super::chave::{ParametrosChave, montar_chave};
+use super::chave::{ParametrosChave, montar_chave, validar_chave};
 use super::config::Config;
 use super::documentos::{cnpj_valido, cpf_valido};
 use super::formatos::*;
@@ -157,6 +157,9 @@ pub struct Ide {
     pub verProc: V,
     #[serde(default)]
     pub cNF: V,
+    /// Chaves de NF-e referenciadas (devolução, complementar, ajuste).
+    #[serde(default)]
+    pub refNFe: Vec<Value>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -355,9 +358,22 @@ fn bloco_ide(ide: &Ide, dh_emi: &str, config: &Config, c_nf: &str, c_dv: u32) ->
     let ind_pres = n(&ide.indPres)?.unwrap_or(1.0);
     let ind_intermed = s(&ide.indIntermed).or_else(|| [2.0, 3.0, 4.0, 9.0].contains(&ind_pres).then(|| "0".into()));
     let inteiro = |v: &V| -> Result<Option<String>> { Ok(n(v)?.map(numero_js)) };
-    Ok(grupo(
-        "ide",
-        &[
+    let fin_nfe = ou(&ide.finNFe, "1");
+    let mut referencias = vec![];
+    for r in &ide.refNFe {
+        let chave = s(&Some(r.clone())).map(|c| so_digitos(&c)).unwrap_or_default();
+        if !validar_chave(&chave) {
+            bail!("Chave da NF-e referenciada inválida: {chave}");
+        }
+        referencias.push(grupo("NFref", &[t("refNFe", &chave)]));
+    }
+    if referencias.is_empty() && matches!(fin_nfe.as_str(), "2" | "4") {
+        bail!("Nota complementar ou de devolução precisa da chave da NF-e referenciada.");
+    }
+    if referencias.len() > 500 {
+        bail!("Uma NF-e aceita no máximo 500 documentos referenciados.");
+    }
+    let mut campos = vec![
             t("cUF", &config.c_uf.to_string()),
             t("cNF", c_nf),
             tag("natOp", limpo(&ide.natOp)),
@@ -379,8 +395,9 @@ fn bloco_ide(ide: &Ide, dh_emi: &str, config: &Config, c_nf: &str, c_dv: u32) ->
             tag("indIntermed", ind_intermed),
             t("procEmi", &ou(&ide.procEmi, "0")),
             t("verProc", &limpo(&ide.verProc).unwrap_or_else(|| VER_PROC.into())),
-        ],
-    ))
+    ];
+    campos.extend(referencias);
+    Ok(grupo("ide", &campos))
 }
 
 fn bloco_emit(emit: &Pessoa) -> Result<String> {

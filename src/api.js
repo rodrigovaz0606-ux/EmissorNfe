@@ -78,7 +78,25 @@ export const api = {
   emitir: (dados) => post('/api/nfe/emitir', dados),
   previaDanfe: (dados) => abrirPdfPost('/api/nfe/danfe-previa', dados),
 
-  notas: (pagina = 1) => chamar(`/api/notas?pagina=${pagina}`),
+  painel: () => chamar('/api/painel'),
+  notas: (pagina = 1, filtros = {}) => {
+    const q = new URLSearchParams({ pagina: String(pagina) });
+    for (const [k, v] of Object.entries(filtros)) if (v) q.set(k, v);
+    return chamar(`/api/notas?${q}`);
+  },
+  exportarNotas: async (de, ate) => {
+    const res = await fetch(`/api/notas/exportar?${new URLSearchParams({ de, ate })}`);
+    if (!res.ok) {
+      avisarSessao(res.status);
+      const corpo = await res.json().catch(() => ({}));
+      throw new Error(corpo.erro || `Erro HTTP ${res.status}`);
+    }
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(await res.blob());
+    link.download = `notas-${de}-a-${ate}.zip`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  },
   nota: (id) => chamar(`/api/notas/${id}`),
   cancelar: (id, xJust) => post(`/api/notas/${id}/cancelar`, { xJust }),
   cce: (id, xCorrecao) => post(`/api/notas/${id}/cce`, { xCorrecao }),
@@ -94,6 +112,11 @@ export const api = {
   criarProduto: (dados) => post('/api/produtos', dados),
   alterarProduto: (id, dados) => put(`/api/produtos/${id}`, dados),
   excluirProduto: (id) => apagar(`/api/produtos/${id}`),
+
+  clientes: () => chamar('/api/clientes'),
+  criarCliente: (dados) => post('/api/clientes', dados),
+  alterarCliente: (id, dados) => put(`/api/clientes/${id}`, dados),
+  excluirCliente: (id) => apagar(`/api/clientes/${id}`),
 };
 
 // Consulta de CEP no ViaCEP (preenche endereço e código IBGE do município).

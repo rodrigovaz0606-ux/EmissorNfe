@@ -2,7 +2,7 @@ import React from 'react';
 import { Secao, Campo } from './campos.jsx';
 import { Tributos } from './Tributos.jsx';
 import { CFOPS, UNIDADES } from '../opcoes.js';
-import { itemVazio, totaisItem, moeda, num, digitos, itemDoProduto, produtoDoItem, itemEstaVazio } from '../modelo.js';
+import { itemVazio, totaisItem, moeda, num, digitos, itemDoProduto, produtoDoItem, itemEstaVazio, cfopDoTipo } from '../modelo.js';
 
 function ItemCartao({ item, indice, aberto, onAlternar, onChange, onRemover, podeRemover, onSalvarProduto }) {
   const s = (campo) => (v) => onChange({ ...item, [campo]: v });
@@ -102,6 +102,9 @@ export function Itens({ nota, set, produtos, onSalvarProduto }) {
 
   function adicionarDoCadastro(produto) {
     const novo = itemDoProduto(produto);
+    // Em devolução, remessa ou entrada, vale o CFOP da operação, não o CFOP padrão do produto.
+    const cfop = cfopDoTipo(nota);
+    if (cfop) novo.CFOP = cfop;
     // Nota recém-aberta com um único item em branco: substitui em vez de acrescentar.
     if (itens.length === 1 && itemEstaVazio(itens[0])) {
       set(['itens'], [novo]);

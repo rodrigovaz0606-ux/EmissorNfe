@@ -159,6 +159,7 @@ pub struct NotaDanfe {
     pub pag: Vec<(String, String)>,
     pub inf_ad_fisco: String,
     pub inf_cpl: String,
+    pub referenciadas: Vec<String>,
     /// (nProt, dhRecbto) quando autorizada.
     pub protocolo: Option<(String, String)>,
 }
@@ -259,6 +260,7 @@ pub fn ler_nota_para_danfe(xml: &str) -> Result<NotaDanfe> {
         pag: filho(inf, "pag").map(|p| filhos(p, "detPag").map(|d| (t(d, "tPag"), t(d, "vPag"))).collect()).unwrap_or_default(),
         inf_ad_fisco: caminho(inf, "infAdic/infAdFisco").unwrap_or_default(),
         inf_cpl: caminho(inf, "infAdic/infCpl").unwrap_or_default(),
+        referenciadas: filhos(ide, "NFref").map(|r| t(r, "refNFe")).collect(),
         protocolo: inf_prot
             .filter(|i| matches!(txt(*i, "cStat").as_deref(), Some("100") | Some("150")))
             .map(|i| (t(i, "nProt"), t(i, "dhRecbto"))),
@@ -554,7 +556,13 @@ fn linha_produto(d: &mut Documento, item: &ItemDanfe, y: f32) -> f32 {
 
 fn bloco_adicionais(d: &mut Documento, n: &NotaDanfe, y: f32, h: f32) {
     let y = titulo_bloco(d, y, "DADOS ADICIONAIS");
-    let texto = [n.inf_ad_fisco.as_str(), n.inf_cpl.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join("\n");
+    let referenciadas = n.referenciadas.iter().map(|c| format!("NF-e referenciada: {c}")).collect::<Vec<_>>().join("\n");
+    let texto = [referenciadas.as_str(), n.inf_ad_fisco.as_str(), n.inf_cpl.as_str()]
+        .iter()
+        .filter(|s| !s.is_empty())
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n");
     caixa(d, M, y, LARG * 0.66, h, "Informações complementares", &texto, OpcCaixa { quebrar: true, tamanho: Some(6.8), ..Default::default() });
     caixa(d, M + LARG * 0.66, y, LARG * 0.34, h, "Reservado ao fisco", "", OpcCaixa::default());
 }

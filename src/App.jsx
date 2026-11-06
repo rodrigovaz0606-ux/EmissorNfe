@@ -1,6 +1,6 @@
 import React from 'react';
 import { api, EVENTO_SESSAO } from './api.js';
-import { notaVazia, totaisNota, pendencias, avisos, paraPayload } from './modelo.js';
+import { notaVazia, totaisNota, pendencias, avisos, paraPayload, notaDoPayload, digitos } from './modelo.js';
 import { Identificacao } from './componentes/Identificacao.jsx';
 import { Emitente } from './componentes/Emitente.jsx';
 import { Destinatario } from './componentes/Destinatario.jsx';
@@ -9,11 +9,13 @@ import { Pagamento } from './componentes/Pagamento.jsx';
 import { Resumo } from './componentes/Resumo.jsx';
 import { Notas } from './componentes/Notas.jsx';
 import { Produtos } from './componentes/Produtos.jsx';
+import { Clientes } from './componentes/Clientes.jsx';
+import { Painel } from './componentes/Painel.jsx';
 import { Produtores, formatarDoc } from './componentes/Produtores.jsx';
 import { Admin, JanelaSenha } from './componentes/Admin.jsx';
 import { TelaLogin, TelaConfiguracao } from './componentes/Acesso.jsx';
 
-const ABAS_EMISSAO = [['emitir', 'Emitir nota'], ['notas', 'Notas emitidas'], ['produtos', 'Produtos']];
+const ABAS_EMISSAO = [['painel', 'Painel'], ['emitir', 'Emitir nota'], ['notas', 'Notas emitidas'], ['clientes', 'Clientes'], ['produtos', 'Produtos']];
 // Rascunho da nota por produtor (trocar de produtor não mistura os rascunhos).
 const chaveRascunho = (produtorId) => `emissor.rascunho.${produtorId}`;
 
@@ -85,7 +87,7 @@ function MenuUsuario({ usuario, onSenha, onSair }) {
 }
 
 // Formulário de emissão do produtor ativo.
-function Emissao({ produtor, emissor, onVerNotas, produtos, carregarProdutos }) {
+function Emissao({ produtor, emissor, onVerNotas, produtos, carregarProdutos, clientes, carregarClientes }) {
   const chave = chaveRascunho(produtor.id);
   const [nota, setNota] = React.useState(() => ler(chave) ?? notaInicial(produtor));
   const [ocupado, setOcupado] = React.useState(null);
@@ -171,6 +173,17 @@ function Emissao({ produtor, emissor, onVerNotas, produtos, carregarProdutos }) 
     return existente ? `Produto ${r.cProd} atualizado no cadastro.` : `Produto ${r.cProd} cadastrado.`;
   }
 
+  async function salvarCliente(d) {
+    const doc = digitos(d.tipo === 'PJ' ? d.CNPJ : d.CPF);
+    const existente = clientes?.find((c) => digitos(c.CPF || c.CNPJ) === doc);
+    if (existente && !window.confirm(`Já existe o cliente ${existente.xNome} com este documento. Substituir pelos dados desta nota?`)) {
+      return 'Cadastro mantido como estava.';
+    }
+    const r = existente ? await api.alterarCliente(existente.id, d) : await api.criarCliente(d);
+    await carregarClientes();
+    return existente ? `Cliente ${r.xNome} atualizado no cadastro.` : `Cliente ${r.xNome} cadastrado.`;
+  }
+
   function novaNota() {
     if (!window.confirm('Começar uma nota nova? Os dados do destinatário e dos itens serão apagados.')) return;
     const base = notaVazia();
@@ -195,7 +208,7 @@ function Emissao({ produtor, emissor, onVerNotas, produtos, carregarProdutos }) 
         <div className="formulario">
           <Identificacao nota={nota} set={set} onSerie={(s) => sugerirNumero(s, true)} />
           <Emitente nota={nota} set={set} certificado={emissor?.certificado} onSalvarPadrao={salvarEmitentePadrao} salvo={emitenteSalvo} />
-          <Destinatario nota={nota} set={set} homologacao={homologacao} />
+          <Destinatario nota={nota} set={set} homologacao={homologacao} clientes={clientes} onSalvarCliente={salvarCliente} />
           <Itens nota={nota} set={set} produtos={produtos} onSalvarProduto={salvarProduto} />
           <Pagamento nota={nota} set={set} vNF={totais.vNF} />
         </div>
@@ -221,6 +234,8 @@ function Principal({ estado, onEstado, onSair }) {
   const [emissor, setEmissor] = React.useState(null);
   const [erroEmissor, setErroEmissor] = React.useState('');
   const [produtos, setProdutos] = React.useState(null);
+  const [clientes, setClientes] = React.useState(null);
+  const [filtroNotas, setFiltroNotas] = React.useState(null);
   const [trocandoSenha, setTrocandoSenha] = React.useState(false);
   const abaValida = abas.some(([a]) => a === aba) ? aba : abas[0][0];
 
@@ -236,6 +251,20 @@ function Principal({ estado, onEstado, onSair }) {
 
   const carregarProdutos = React.useCallback(() => api.produtos().then(setProdutos).catch(() => setProdutos(null)), []);
   React.useEffect(() => { if (produtor) carregarProdutos(); }, [produtor, carregarProdutos]);
+
+  const carregarClientes = React.useCallback(() => api.clientes().then(setClientes).catch(() => setClientes(null)), []);
+  React.useEffect(() => { if (produtor) carregarClientes(); }, [produtor, carregarClientes]);
+
+  // Abre Notas emitidas já filtrada (atalhos do painel).
+  const verNotas = (filtro = null) => { setFiltroNotas(filtro); trocarAba('notas'); };
+
+  // Duplicar: a cópia vira o rascunho do produtor, e a tela de emissão abre com ela.
+  function duplicarNota(dados) {
+    if (!window.confirm('Abrir uma nota nova com os dados desta? O rascunho atual será substituído.')) return;
+    const chave = chaveRascunho(produtor.id);
+    gravar(chave, notaDoPayload(dados, ler(chave) ?? notaInicial(produtor)));
+    trocarAba('emitir');
+  }
 
   const aoSelecionarProdutor = (p) => {
     history.replaceState(null, '', '#');
@@ -255,7 +284,7 @@ function Principal({ estado, onEstado, onSair }) {
         </div>
         <nav className="abas" role="tablist">
           {abas.map(([a, rotulo]) => (
-            <button key={a} type="button" role="tab" aria-selected={abaValida === a} className={abaValida === a ? 'ativa' : ''} onClick={() => trocarAba(a)}>{rotulo}</button>
+            <button key={a} type="button" role="tab" aria-selected={abaValida === a} className={abaValida === a ? 'ativa' : ''} onClick={() => { setFiltroNotas(null); trocarAba(a); }}>{rotulo}</button>
           ))}
         </nav>
         <div className="topo-direita">
@@ -279,9 +308,14 @@ function Principal({ estado, onEstado, onSair }) {
       {erroEmissor && <div className="faixa-erro">Não foi possível carregar o produtor: {erroEmissor}</div>}
 
       {abaValida === 'emitir' && produtor && (
-        <Emissao produtor={produtor} emissor={emissor} onVerNotas={() => trocarAba('notas')} produtos={produtos} carregarProdutos={carregarProdutos} />
+        <Emissao
+          produtor={produtor} emissor={emissor} onVerNotas={() => verNotas()} produtos={produtos} carregarProdutos={carregarProdutos}
+          clientes={clientes} carregarClientes={carregarClientes}
+        />
       )}
-      {abaValida === 'notas' && <Notas emissor={emissor} />}
+      {abaValida === 'painel' && produtor && <Painel onVerNotas={verNotas} onVerProdutores={() => trocarAba('produtores')} />}
+      {abaValida === 'notas' && <Notas emissor={emissor} filtroInicial={filtroNotas} onDuplicar={duplicarNota} />}
+      {abaValida === 'clientes' && <Clientes onAlterados={carregarClientes} />}
       {abaValida === 'produtos' && <Produtos onAlterados={carregarProdutos} />}
       {abaValida === 'produtores' && (
         <Produtores

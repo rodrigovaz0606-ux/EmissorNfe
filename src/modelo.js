@@ -2,6 +2,7 @@
 // Usa o mesmo arredondamento do backend para que tela e XML calculem igual.
 import { cpfValido, cnpjValido } from './fiscal/documentos.js';
 import { multiplicarEmCentavos, paraCentavos, centavos } from './fiscal/valores.js';
+import { TIPOS_NOTA } from './opcoes.js';
 
 export { cpfValido, cnpjValido };
 
@@ -29,7 +30,7 @@ export const itemVazio = () => ({
 });
 
 export const notaVazia = () => ({
-  ide: { natOp: 'VENDA DE PRODUCAO DO ESTABELECIMENTO', serie: '1', nNF: '1', tpNF: '1', finNFe: '1', indFinal: '1', indPres: '1' },
+  ide: { tipoNota: 'venda_producao', natOp: 'VENDA DE PRODUCAO DO ESTABELECIMENTO', serie: '1', nNF: '1', tpNF: '1', finNFe: '1', indFinal: '1', indPres: '1', refNFe: [] },
   emit: { CPF: '', CNPJ: '', xNome: '', IE: '', CRT: '3', ender: enderecoVazio() },
   dest: { tipo: 'PF', CPF: '', CNPJ: '', xNome: '', indIEDest: '9', IE: '', email: '', ender: enderecoVazio() },
   itens: [itemVazio()],
@@ -62,6 +63,83 @@ export function produtoDoItem(it) {
 }
 
 export const itemEstaVazio = (it) => !it.xProd.trim() && !it.cProd.trim() && !it.vUnCom;
+
+// ---------- cadastro de clientes ----------
+export const clienteVazio = () => ({ tipo: 'PF', CPF: '', CNPJ: '', xNome: '', indIEDest: '9', IE: '', email: '', ender: enderecoVazio() });
+
+// Destinatário da nota a partir de um cliente cadastrado (sem o id do cadastro).
+export function destDoCliente(c) {
+  const { id, ...resto } = c;
+  return { ...clienteVazio(), ...resto, ender: { ...enderecoVazio(), ...c.ender } };
+}
+
+// ---------- tipos de nota ----------
+const tipoDaNota = (nota) => TIPOS_NOTA.find((t) => t.id === nota.ide.tipoNota);
+
+// CFOP do tipo de nota para a operação (interna ou interestadual); undefined se for personalizado.
+export function cfopDoTipo(nota) {
+  return tipoDaNota(nota)?.cfop[idDestDe(nota) - 1];
+}
+
+// Aplica um modelo de operação à nota. Id vazio ("personalizado") só desliga o modelo.
+export function aplicarTipoNota(nota, id) {
+  const t = TIPOS_NOTA.find((x) => x.id === id);
+  if (!t) return { ...nota, ide: { ...nota.ide, tipoNota: '' } };
+  const cfop = t.cfop[idDestDe(nota) - 1];
+  const semPagamento = nota.pag.every((p) => p.tPag === '90');
+  return {
+    ...nota,
+    ide: {
+      ...nota.ide, tipoNota: id, natOp: t.natOp, tpNF: t.tpNF, finNFe: t.finNFe,
+      indFinal: t.venda ? '1' : '0', indPres: t.venda ? '1' : '9',
+    },
+    itens: nota.itens.map((it) => ({ ...it, CFOP: cfop })),
+    pag: t.semPagamento ? [{ tPag: '90', vPag: '' }] : semPagamento ? [{ tPag: '01', vPag: '' }] : nota.pag,
+  };
+}
+
+export const precisaReferencia = (nota) => ['2', '4'].includes(nota.ide.finNFe);
+export const aceitaReferencia = (nota) => ['2', '3', '4'].includes(nota.ide.finNFe);
+const referencias = (nota) => (nota.ide.refNFe ?? []).map(digitos).filter(Boolean);
+
+// ---------- duplicar nota ----------
+const texto = (v) => (v === undefined || v === null ? '' : String(v));
+const decimal = (v) => texto(v).replace('.', ',');
+const enderecoDoPayload = (e = {}) => ({
+  ...enderecoVazio(), CEP: texto(e.CEP), xLgr: texto(e.xLgr), nro: texto(e.nro), xCpl: texto(e.xCpl), xBairro: texto(e.xBairro),
+  cMun: texto(e.cMun), xMun: texto(e.xMun), UF: texto(e.UF) || 'GO', fone: texto(e.fone),
+});
+
+// Formulário a partir dos dados guardados de uma nota. O emitente continua o atual e o número
+// fica em branco, para a tela sugerir o próximo livre.
+export function notaDoPayload(p, atual) {
+  const d = p.dest ?? {};
+  const tipo = TIPOS_NOTA.find((t) => t.natOp === p.ide?.natOp && t.tpNF === texto(p.ide?.tpNF) && t.finNFe === texto(p.ide?.finNFe));
+  const vazia = notaVazia();
+  return {
+    ...vazia,
+    ide: {
+      ...vazia.ide, tipoNota: tipo?.id ?? '', natOp: texto(p.ide?.natOp), serie: texto(p.ide?.serie) || '1', nNF: '',
+      tpNF: texto(p.ide?.tpNF) || '1', finNFe: texto(p.ide?.finNFe) || '1', indFinal: texto(p.ide?.indFinal) || '1',
+      indPres: texto(p.ide?.indPres) || '1', refNFe: (p.ide?.refNFe ?? []).map(texto),
+    },
+    emit: atual.emit,
+    dest: {
+      tipo: d.CNPJ ? 'PJ' : 'PF', CPF: texto(d.CPF), CNPJ: texto(d.CNPJ), xNome: texto(d.xNome), indIEDest: texto(d.indIEDest) || '9',
+      IE: texto(d.IE), email: texto(d.email), ender: enderecoDoPayload(d.ender),
+    },
+    itens: (p.itens ?? []).map((it) => ({
+      ...itemVazio(), cProd: texto(it.cProd), xProd: texto(it.xProd), NCM: texto(it.NCM), CFOP: texto(it.CFOP), uCom: texto(it.uCom),
+      qCom: decimal(it.qCom), vUnCom: decimal(it.vUnCom), vDesc: decimal(it.vDesc), vFrete: decimal(it.vFrete), infAdProd: texto(it.infAdProd),
+      icms: { orig: texto(it.icms?.orig) || '0', CST: texto(it.icms?.CST) || '51', pICMS: decimal(it.icms?.pICMS) },
+      pis: { CST: texto(it.pis?.CST) || '08', pPIS: decimal(it.pis?.pPIS) },
+      cofins: { CST: texto(it.cofins?.CST) || '08', pCOFINS: decimal(it.cofins?.pCOFINS) },
+    })),
+    transp: { modFrete: texto(p.transp?.modFrete) || '9' },
+    pag: (p.pag?.length ? p.pag : [{ tPag: '90' }]).map((pg) => ({ tPag: texto(pg.tPag), vPag: decimal(pg.vPag) })),
+    infAdic: { infCpl: texto(p.infAdic?.infCpl) },
+  };
+}
 
 // ---------- totais (mesmas regras de gerarXml.js) ----------
 export function totaisItem(it) {
@@ -109,6 +187,9 @@ export function pendencias(nota) {
 
   falta(nota.ide.natOp.trim(), 'Natureza da operação');
   falta(Number(nota.ide.nNF) >= 1, 'Número da nota');
+  const refs = referencias(nota);
+  if (precisaReferencia(nota)) falta(refs.length > 0, 'Chave da NF-e referenciada');
+  if (aceitaReferencia(nota)) refs.forEach((r, i) => falta(r.length === 44, `NF-e referenciada ${i + 1}: chave com 44 dígitos`));
 
   falta(nota.emit.xNome.trim(), 'Emitente: nome');
   falta(digitos(nota.emit.IE), 'Emitente: inscrição estadual');
@@ -144,9 +225,14 @@ export function avisos(nota) {
   const idDest = idDestDe(nota);
   nota.itens.forEach((it, i) => {
     const c = digitos(it.CFOP)[0];
-    if (idDest === 1 && c && c !== '5' && nota.ide.tpNF === '1') a.push(`Item ${i + 1}: operação interna normalmente usa CFOP 5xxx`);
-    if (idDest === 2 && c && c !== '6' && nota.ide.tpNF === '1') a.push(`Item ${i + 1}: operação interestadual normalmente usa CFOP 6xxx`);
+    // Saída interna 5xxx, interestadual 6xxx; entrada interna 1xxx, interestadual 2xxx.
+    const esperado = nota.ide.tpNF === '1' ? (idDest === 1 ? '5' : '6') : (idDest === 1 ? '1' : '2');
+    const operacao = idDest === 1 ? 'interna' : 'interestadual';
+    if (c && c !== esperado) a.push(`Item ${i + 1}: ${nota.ide.tpNF === '1' ? 'saída' : 'entrada'} ${operacao} normalmente usa CFOP ${esperado}xxx`);
   });
+  if (['3', '4'].includes(nota.ide.finNFe) && nota.pag.some((p) => p.tPag !== '90')) {
+    a.push('Nota de devolução ou ajuste normalmente usa a forma de pagamento "Sem pagamento"');
+  }
   if (nota.pag.length > 1) {
     const soma = nota.pag.reduce((s, p) => s + (Number.isFinite(num(p.vPag)) ? paraCentavos(num(p.vPag)) : 0), 0);
     if (soma !== totaisNota(nota).vNF) a.push('A soma dos pagamentos difere do total da nota');
@@ -170,6 +256,7 @@ export function paraPayload(nota) {
       natOp: nota.ide.natOp, serie: Number(nota.ide.serie), nNF: Number(nota.ide.nNF), tpNF: Number(nota.ide.tpNF),
       idDest: idDestDe(nota), cMunFG: digitos(nota.emit.ender.cMun), finNFe: Number(nota.ide.finNFe),
       indFinal: Number(nota.ide.indFinal), indPres: Number(nota.ide.indPres),
+      refNFe: aceitaReferencia(nota) && referencias(nota).length > 0 ? referencias(nota) : undefined,
     },
     emit: { ...doc(nota.emit), xNome: nota.emit.xNome, IE: digitos(nota.emit.IE), CRT: Number(nota.emit.CRT), ender: enderecoPayload(nota.emit.ender) },
     dest: {

@@ -11,14 +11,16 @@
 //! - demais rotas: usuário logado com um produtor selecionado (usam o certificado dele).
 
 use crate::auth::{self, DURACAO_SESSAO, NOME_COOKIE};
+use crate::clientes;
 use crate::cofre::Cofre;
 use crate::contas::{self, SessaoAtual};
 use crate::danfe::gerar_danfe;
-use crate::db::Repositorio;
+use crate::db::{FiltroNotas, Repositorio};
 use crate::emissao::{self, Ativo, Contexto, ErroNegocio, SefazReal};
 use crate::fiscal::config::carregar_config;
 use crate::fiscal::soap::ErroRede;
 use crate::produtos;
+use crate::relatorios;
 use crate::simulada::SefazSimulada;
 use anyhow::{Result, bail};
 use axum::Router;
@@ -407,13 +409,35 @@ async fn emitir(State(ctx): State<Ctx>, ComProdutor(a): ComProdutor, corpo: Byte
 }
 
 #[derive(Deserialize)]
-struct Pagina {
+struct ConsultaNotas {
     pagina: Option<String>,
+    de: Option<String>,
+    ate: Option<String>,
+    status: Option<String>,
+    busca: Option<String>,
 }
 
-async fn notas(State(ctx): State<Ctx>, ComProdutor(a): ComProdutor, Query(q): Query<Pagina>) -> Result<Response, ErroApi> {
+async fn notas(State(ctx): State<Ctx>, ComProdutor(a): ComProdutor, Query(q): Query<ConsultaNotas>) -> Result<Response, ErroApi> {
     let pagina = q.pagina.and_then(|p| p.parse::<i64>().ok()).unwrap_or(1).max(1);
-    Ok(json_ok(bloqueante(&ctx, move |c| c.repo().listar_notas(a.id, pagina, 50)).await?))
+    let filtro = FiltroNotas { de: q.de, ate: q.ate, status: q.status, busca: q.busca };
+    Ok(json_ok(bloqueante(&ctx, move |c| c.repo().listar_notas(a.id, &filtro, pagina, 50)).await?))
+}
+
+#[derive(Deserialize)]
+struct Periodo {
+    de: Option<String>,
+    ate: Option<String>,
+}
+
+async fn exportar_notas(State(ctx): State<Ctx>, ComProdutor(a): ComProdutor, Query(q): Query<Periodo>) -> Result<Response, ErroApi> {
+    let (de, ate) = (q.de.unwrap_or_default(), q.ate.unwrap_or_default());
+    let nome = format!("notas-{de}-a-{ate}.zip");
+    let zip = bloqueante(&ctx, move |c| relatorios::exportar_zip(c, &a, &de, &ate)).await?;
+    Ok(arquivo(zip, "application/zip", format!("attachment; filename=\"{nome}\"")))
+}
+
+async fn painel(State(ctx): State<Ctx>, Logado(s): Logado, ComProdutor(a): ComProdutor) -> Result<Response, ErroApi> {
+    Ok(json_ok(bloqueante(&ctx, move |c| relatorios::painel(c, &s, &a)).await?))
 }
 
 async fn nota(State(ctx): State<Ctx>, ComProdutor(a): ComProdutor, Path(id): Path<String>) -> Result<Response, ErroApi> {
@@ -507,6 +531,30 @@ async fn excluir_produto(State(ctx): State<Ctx>, ComProdutor(a): ComProdutor, Pa
     }
 }
 
+async fn listar_clientes(State(ctx): State<Ctx>, ComProdutor(a): ComProdutor) -> Result<Response, ErroApi> {
+    Ok(json_ok(Value::Array(bloqueante(&ctx, move |c| c.repo().listar_clientes(a.id)).await?)))
+}
+
+async fn criar_cliente(State(ctx): State<Ctx>, ComProdutor(a): ComProdutor, corpo: Bytes) -> Result<Response, ErroApi> {
+    let dados = corpo_json(&corpo)?;
+    let p = bloqueante(&ctx, move |c| clientes::salvar_cliente(None, &dados, c, &a)).await?;
+    Ok((StatusCode::CREATED, axum::Json(p)).into_response())
+}
+
+async fn alterar_cliente(State(ctx): State<Ctx>, ComProdutor(a): ComProdutor, Path(id): Path<String>, corpo: Bytes) -> Result<Response, ErroApi> {
+    let (id, dados) = (id_de(&id), corpo_json(&corpo)?);
+    Ok(json_ok(bloqueante(&ctx, move |c| clientes::salvar_cliente(Some(id), &dados, c, &a)).await?))
+}
+
+async fn excluir_cliente(State(ctx): State<Ctx>, ComProdutor(a): ComProdutor, Path(id): Path<String>) -> Result<Response, ErroApi> {
+    let id = id_de(&id);
+    if bloqueante(&ctx, move |c| c.repo().excluir_cliente(a.id, id)).await? {
+        Ok(StatusCode::NO_CONTENT.into_response())
+    } else {
+        Err(nao_encontrado("Cliente não encontrado"))
+    }
+}
+
 /// Monta a aplicação. `dist`: pasta da interface compilada (opcional).
 pub fn criar_app(ctx: Ctx, dist: Option<PathBuf>) -> Router {
     let api = Router::new()
@@ -532,7 +580,9 @@ pub fn criar_app(ctx: Ctx, dist: Option<PathBuf>) -> Router {
         .route("/nfe/validar", post(validar))
         .route("/nfe/danfe-previa", post(danfe_previa))
         .route("/nfe/emitir", post(emitir))
+        .route("/painel", get(painel))
         .route("/notas", get(notas))
+        .route("/notas/exportar", get(exportar_notas))
         .route("/notas/{id}", get(nota))
         .route("/notas/{id}/xml", get(nota_xml))
         .route("/notas/{id}/danfe", get(nota_danfe))
@@ -543,6 +593,8 @@ pub fn criar_app(ctx: Ctx, dist: Option<PathBuf>) -> Router {
         .route("/inutilizacoes", get(inutilizacoes).post(inutilizar))
         .route("/produtos", get(listar_produtos).post(criar_produto))
         .route("/produtos/{id}", put(alterar_produto).delete(excluir_produto))
+        .route("/clientes", get(listar_clientes).post(criar_cliente))
+        .route("/clientes/{id}", put(alterar_cliente).delete(excluir_cliente))
         .layer(axum::middleware::map_response(sem_cache))
         .layer(axum::middleware::from_fn(mesma_origem))
         .with_state(ctx);

@@ -546,7 +546,7 @@ fn banco_antigo_e_migrado_e_os_dados_vao_para_o_produtor() {
     let id = p["id"].as_i64().unwrap();
     {
         let repo = ctx.repo();
-        assert_eq!(repo.listar_notas(id, 1, 50).unwrap()["total"], json!(1));
+        assert_eq!(repo.listar_notas(id, &emissor_nfe::db::FiltroNotas::default(), 1, 50).unwrap()["total"], json!(1));
         assert_eq!(repo.listar_produtos(id).unwrap().len(), 1);
         assert_eq!(repo.listar_inutilizacoes(id).unwrap().len(), 1);
         assert_eq!(repo.proximo_numero(id, 1).unwrap(), 10);
@@ -557,4 +557,166 @@ fn banco_antigo_e_migrado_e_os_dados_vao_para_o_produtor() {
     for sufixo in ["", "-wal", "-shm"] {
         let _ = std::fs::remove_file(format!("{}{sufixo}", arq.display()));
     }
+}
+
+// ---------- clientes, filtros, exportação, painel e notas referenciadas ----------
+
+fn cliente(doc: &str, nome: &str) -> Value {
+    json!({ "tipo": "PF", "CPF": doc, "xNome": nome, "indIEDest": "9",
+            "ender": { "xLgr": "RUA A", "nro": "1", "xBairro": "CENTRO", "cMun": "5208707", "xMun": "GOIANIA", "UF": "GO", "CEP": "74000000" } })
+}
+
+#[tokio::test]
+async fn cadastro_de_clientes_separado_por_produtor() {
+    let api = Api::nova().await;
+    assert_eq!(api.get("/clientes").await.json(), json!([]));
+    let r = api.post("/clientes", cliente("529.982.247-25", "joao")).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.texto());
+    let id = r.json()["id"].as_i64().unwrap();
+    assert_eq!(r.json()["CPF"], json!("52998224725"));
+    assert_eq!(r.json()["xNome"], json!("JOAO"));
+
+    // mesmo documento é recusado; documento inválido também
+    assert!(api.post("/clientes", cliente("52998224725", "OUTRO")).await.json()["erro"].as_str().unwrap().contains("Já existe"));
+    assert_eq!(api.post("/clientes", cliente("111", "X Y")).await.status, StatusCode::BAD_REQUEST);
+
+    // alterar mantendo o documento funciona; ordem alfabética
+    let r = api.chamar("PUT", &format!("/clientes/{id}"), Some(cliente("52998224725", "ZECA"))).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.texto());
+    api.post("/clientes", cliente("39053344705", "ANA")).await;
+    let lista = api.get("/clientes").await.json();
+    let nomes: Vec<_> = lista.as_array().unwrap().iter().map(|c| c["xNome"].as_str().unwrap()).collect();
+    assert_eq!(nomes, ["ANA", "ZECA"]);
+
+    // outro produtor não vê nem altera
+    api.post("/produtores", envio_pfx(PFX_CPF, "teste")).await;
+    assert_eq!(api.get("/clientes").await.json(), json!([]));
+    assert_eq!(api.chamar("PUT", &format!("/clientes/{id}"), Some(cliente("52998224725", "HACK"))).await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(api.chamar("DELETE", &format!("/clientes/{id}"), None).await.status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn filtros_e_paginacao_das_notas() {
+    let api = Api::nova().await;
+    for n in 1..=3 {
+        let mut d = nota(n);
+        d["dest"]["xNome"] = json!(if n == 3 { "FAZENDA 100% BOA" } else { "COMPRADOR" });
+        api.post("/nfe/emitir", d).await;
+    }
+    api.rejeitar.store(true, Ordering::SeqCst);
+    api.post("/nfe/emitir", nota(4)).await;
+
+    let total = |r: Resposta| r.json()["total"].as_i64().unwrap();
+    assert_eq!(total(api.get("/notas").await), 4);
+    assert_eq!(total(api.get("/notas?status=rejeitada").await), 1);
+    assert_eq!(total(api.get("/notas?status=autorizada").await), 3);
+    assert_eq!(total(api.get("/notas?busca=fazenda").await), 1);
+    assert_eq!(total(api.get("/notas?busca=100%25%20boa").await), 1);
+    assert_eq!(total(api.get("/notas?busca=a%25boa").await), 0, "% é texto, não curinga");
+    assert_eq!(total(api.get("/notas?busca=%25%25%25").await), 0);
+    let hoje = chrono::Local::now().format("%Y-%m-%d").to_string();
+    assert_eq!(total(api.get(&format!("/notas?de={hoje}&ate={hoje}")).await), 4);
+    assert_eq!(total(api.get("/notas?ate=2000-01-01").await), 0);
+    // número exato ou CPF/CNPJ
+    let so_tres = api.get("/notas?busca=3").await.json();
+    assert!(so_tres["notas"].as_array().unwrap().iter().any(|n| n["nNF"] == json!(3)));
+    assert_eq!(total(api.get("/notas?busca=abc'%20OR%201=1--").await), 0, "sem injeção de SQL");
+    // paginação
+    let p = api.get("/notas?pagina=2").await.json();
+    assert_eq!((p["pagina"].clone(), p["porPagina"].clone(), p["notas"].as_array().unwrap().len()), (json!(2), json!(50), 0));
+}
+
+#[tokio::test]
+async fn exportacao_para_o_contador_e_painel() {
+    let api = Api::nova().await;
+    let hoje = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let url = format!("/notas/exportar?de={hoje}&ate={hoje}");
+    assert!(api.get(&url).await.json()["erro"].as_str().unwrap().contains("Nenhum documento"));
+    assert_eq!(api.get("/notas/exportar?de=ontem&ate=hoje").await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(api.get("/notas/exportar?de=2026-02-01&ate=2026-01-01").await.status, StatusCode::BAD_REQUEST);
+
+    // autorizada, cancelada e rejeitada
+    let a1 = api.post("/nfe/emitir", nota(1)).await.json();
+    let a2 = api.post("/nfe/emitir", nota(2)).await.json();
+    api.post(&format!("/notas/{}/cancelar", a2["id"]), json!({ "xJust": "Cancelamento de teste automatizado" })).await;
+    api.rejeitar.store(true, Ordering::SeqCst);
+    let rej = api.post("/nfe/emitir", nota(3)).await.json();
+    api.post("/inutilizacoes", json!({ "serie": 1, "nNFIni": 7, "nNFFin": 8, "xJust": "Teste de inutilizacao automatizado" })).await;
+
+    let r = api.get(&url).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.texto());
+    assert_eq!(r.tipo, "application/zip");
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(r.corpo)).unwrap();
+    let nomes: Vec<String> = z.file_names().map(|n| n.unwrap().to_string()).collect();
+    let tem = |n: String| assert!(nomes.contains(&n), "{n} não está em {nomes:?}");
+    tem(format!("notas/{}-procNFe.xml", a1["chave"].as_str().unwrap()));
+    tem(format!("notas/{}-procNFe.xml", a2["chave"].as_str().unwrap()));
+    tem(format!("eventos/{}-cancelamento-1.xml", a2["chave"].as_str().unwrap()));
+    tem("inutilizacoes/inutilizacao-serie1-7-8.xml".to_string());
+    assert!(!nomes.iter().any(|n| n.contains(rej["chave"].as_str().unwrap())), "rejeitada fica de fora");
+
+    let mut csv = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("resumo.csv").unwrap(), &mut csv).unwrap();
+    assert!(csv.starts_with('\u{feff}'));
+    assert_eq!(csv.lines().count(), 3, "{csv}");
+    assert!(csv.contains("\"cancelada\"") && csv.contains(a1["chave"].as_str().unwrap()));
+    assert!(!csv.contains(rej["chave"].as_str().unwrap()));
+
+    // painel do mês: cancelada não soma no valor
+    let p = api.get("/painel").await.json();
+    assert_eq!(p["mes"]["autorizadas"], json!(1));
+    assert_eq!(p["mes"]["canceladas"], json!(1));
+    assert_eq!(p["mes"]["rejeitadas"], json!(1));
+    let centavos = (a1["vNF"].as_str().unwrap().parse::<f64>().unwrap() * 100.0).round() as i64;
+    assert_eq!(p["mes"]["valor_autorizado"], json!(centavos));
+    assert_eq!(p["meses"].as_array().unwrap().len(), 6);
+    assert_eq!(p["meses"][5]["valor"], json!(centavos));
+    assert_eq!(p["meses"][5]["mes"], json!(hoje[..7]));
+    assert_eq!(p["meses"][0]["valor"], json!(0));
+
+    // outro produtor: nada disso aparece nem é exportado
+    api.post("/produtores", envio_pfx(PFX_CPF, "teste")).await;
+    assert_eq!(api.get("/painel").await.json()["mes"]["autorizadas"], json!(0));
+    assert_eq!(api.get(&url).await.status, StatusCode::BAD_REQUEST);
+    // sem produtor nem login
+    assert_eq!(api.outro_navegador().get("/painel").await.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(api.outro_navegador().get(&url).await.status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn devolucao_entrada_e_remessa_passam_no_schema() {
+    let api = Api::nova().await;
+    let original = api.post("/nfe/emitir", nota(1)).await.json();
+    let chave = original["chave"].as_str().unwrap().to_string();
+
+    // devolução sem nota referenciada é barrada; com chave inválida também
+    let mut d = nota(2);
+    d["ide"]["finNFe"] = json!(4);
+    d["ide"]["natOp"] = json!("DEVOLUCAO DE COMPRA");
+    d["itens"][0]["CFOP"] = json!("5201");
+    d["pag"] = json!([{ "tPag": "90" }]);
+    assert!(api.post("/nfe/validar", d.clone()).await.json()["erro"].as_str().unwrap().contains("referenciada"));
+    d["ide"]["refNFe"] = json!(["52000000000000000000000000000000000000000000"]);
+    assert!(api.post("/nfe/validar", d.clone()).await.json()["erro"].as_str().unwrap().contains("inválida"));
+    d["ide"]["refNFe"] = json!([chave]);
+    let v = api.post("/nfe/validar", d.clone()).await.json();
+    assert_eq!(v["xsd"]["valido"], json!(true), "{v}");
+
+    // a referência vai no XML, no fim de <ide>, e aparece no DANFE
+    let r = api.post("/nfe/emitir", d.clone()).await.json();
+    assert_eq!(r["status"], json!("autorizada"), "{r}");
+    let xml = api.get(&format!("/notas/{}/xml", r["id"])).await.texto();
+    assert!(xml.contains(&format!("<NFref><refNFe>{chave}</refNFe></NFref></ide>")), "{xml}");
+    assert!(xml.contains("<finNFe>4</finNFe>") && xml.contains("<tPag>90</tPag><vPag>0.00</vPag>"));
+    assert_eq!(api.get(&format!("/notas/{}/danfe", r["id"])).await.tipo, "application/pdf");
+
+    // entrada (tpNF 0) e remessa
+    let mut e = nota(3);
+    e["ide"]["tpNF"] = json!(0);
+    e["itens"][0]["CFOP"] = json!("1101");
+    assert_eq!(api.post("/nfe/validar", e).await.json()["xsd"]["valido"], json!(true));
+    let mut re = nota(4);
+    re["itens"][0]["CFOP"] = json!("5905");
+    re["pag"] = json!([{ "tPag": "90" }]);
+    assert_eq!(api.post("/nfe/validar", re).await.json()["xsd"]["valido"], json!(true));
 }

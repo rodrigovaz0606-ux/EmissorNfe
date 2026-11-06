@@ -19,7 +19,7 @@ export const Selo = ({ status }) => {
 const moeda = (v) => Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const dataHora = (s) => (s ? new Date(s.replace(' ', 'T')).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '');
 
-function DetalheNota({ id, onFechar, onAlterada }) {
+function DetalheNota({ id, onFechar, onAlterada, onDuplicar }) {
   const [nota, setNota] = React.useState(null);
   const [erro, setErro] = React.useState('');
   const [acao, setAcao] = React.useState(null); // 'cancelar' | 'cce'
@@ -92,6 +92,7 @@ function DetalheNota({ id, onFechar, onAlterada }) {
         <a className="btn-secundario" href={api.urlXml(id)}>{nota.tem_proc ? 'XML autorizado' : 'XML enviado'}</a>
         <a className="btn-texto" href={api.urlXml(id, 'resposta')}>Resposta da SEFAZ</a>
         <span className="espaco" />
+        <button type="button" className="btn-secundario" onClick={() => onDuplicar(nota.dados)} disabled={!nota.dados} title="Abre uma nota nova com os mesmos dados">Duplicar nota</button>
         <button type="button" className="btn-secundario" onClick={consultar} disabled={consultando}>{consultando ? 'Consultando…' : 'Consultar na SEFAZ'}</button>
         <button type="button" className="btn-secundario" onClick={() => setAcao('cce')} disabled={!autorizada} title={autorizada ? '' : 'Só para nota autorizada'}>Carta de correção</button>
         <button type="button" className="btn-perigo" onClick={() => setAcao('cancelar')} disabled={!autorizada} title={autorizada ? '' : 'Só para nota autorizada'}>Cancelar nota</button>
@@ -153,24 +154,105 @@ function JanelaInutilizar({ onFechar, onConcluida }) {
   );
 }
 
-export function Notas({ emissor }) {
+const SITUACOES = [['', 'Todas'], ['autorizada', 'Autorizada'], ['rejeitada', 'Rejeitada'], ['cancelada', 'Cancelada'], ['denegada', 'Denegada'], ['pendente', 'Pendente']];
+
+const aaaaMmDd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+// Primeiro e último dia do mês, `atras` meses antes do atual.
+function periodoDoMes(atras) {
+  const h = new Date();
+  return { de: aaaaMmDd(new Date(h.getFullYear(), h.getMonth() - atras, 1)), ate: aaaaMmDd(new Date(h.getFullYear(), h.getMonth() - atras + 1, 0)) };
+}
+
+function JanelaExportar({ onFechar }) {
+  const [p, setP] = React.useState(() => periodoDoMes(1));
+  const [enviando, setEnviando] = React.useState(false);
+  const [erro, setErro] = React.useState('');
+  const [ok, setOk] = React.useState(false);
+
+  async function exportar() {
+    setEnviando(true);
+    setErro('');
+    setOk(false);
+    try {
+      await api.exportarNotas(p.de, p.ate);
+      setOk(true);
+    } catch (e) {
+      setErro(e.message);
+    } finally {
+      setEnviando(false);
+    }
+  }
+
+  return (
+    <Janela titulo="Exportar para o contador" onFechar={enviando ? () => {} : onFechar}>
+      <div className="explicacao">
+        Gera um ZIP com os XMLs das notas autorizadas, canceladas e denegadas, os eventos e as inutilizações do período, mais um resumo.csv que abre no Excel.
+        Notas rejeitadas ou pendentes não entram, porque não têm valor fiscal.
+      </div>
+      <div className="atalhos-periodo">
+        <button type="button" className="btn-texto" onClick={() => setP(periodoDoMes(1))}>Mês passado</button>
+        <button type="button" className="btn-texto" onClick={() => setP(periodoDoMes(0))}>Este mês</button>
+      </div>
+      <div className="grade">
+        <label className="campo l-g"><span className="rotulo">De</span><input type="date" value={p.de} onChange={(e) => setP({ ...p, de: e.target.value })} /></label>
+        <label className="campo l-g"><span className="rotulo">Até</span><input type="date" value={p.ate} onChange={(e) => setP({ ...p, ate: e.target.value })} /></label>
+      </div>
+      {erro && <div className="faixa-erro-local" role="alert">{erro}</div>}
+      {ok && <div className="aviso-local ok">Arquivo gerado. Veja a pasta de downloads do navegador.</div>}
+      <div className="janela-botoes">
+        <button type="button" className="btn-secundario" onClick={onFechar} disabled={enviando}>Fechar</button>
+        <button type="button" className="btn-primario" onClick={exportar} disabled={enviando || !p.de || !p.ate}>{enviando ? 'Gerando…' : 'Baixar ZIP'}</button>
+      </div>
+    </Janela>
+  );
+}
+
+const FILTROS_VAZIOS = { de: '', ate: '', status: '', busca: '' };
+
+export function Notas({ emissor, filtroInicial, onDuplicar }) {
   const [dados, setDados] = React.useState(null);
   const [erro, setErro] = React.useState('');
   const [aberta, setAberta] = React.useState(null);
   const [inutilizando, setInutilizando] = React.useState(false);
+  const [exportando, setExportando] = React.useState(false);
   const [aviso, setAviso] = React.useState(null);
+  const [filtros, setFiltros] = React.useState(() => ({ ...FILTROS_VAZIOS, ...filtroInicial }));
+  const [pagina, setPagina] = React.useState(1);
+  const [buscaAplicada, setBuscaAplicada] = React.useState(filtros.busca);
+  const pedido = React.useRef(0);
 
-  const carregar = React.useCallback(() => api.notas().then(setDados).catch((e) => setErro(e.message)), []);
+  // A busca espera a pessoa parar de digitar.
+  React.useEffect(() => {
+    const t = setTimeout(() => { setBuscaAplicada(filtros.busca); setPagina(1); }, 300);
+    return () => clearTimeout(t);
+  }, [filtros.busca]);
+
+  const carregar = React.useCallback(() => {
+    pedido.current += 1;
+    const este = pedido.current;
+    setErro('');
+    return api.notas(pagina, { de: filtros.de, ate: filtros.ate, status: filtros.status, busca: buscaAplicada })
+      .then((d) => { if (este === pedido.current) setDados(d); }) // ignora resposta atrasada de um filtro antigo
+      .catch((e) => { if (este === pedido.current) setErro(e.message); });
+  }, [pagina, filtros.de, filtros.ate, filtros.status, buscaAplicada]);
   React.useEffect(() => { carregar(); }, [carregar]);
+
+  const filtrar = (campo) => (e) => {
+    setFiltros((f) => ({ ...f, [campo]: e.target.value }));
+    if (campo !== 'busca') setPagina(1);
+  };
+  const temFiltro = Object.values(filtros).some(Boolean);
+  const paginas = dados ? Math.max(1, Math.ceil(dados.total / (dados.porPagina || 50))) : 1;
 
   return (
     <div className="pagina-notas">
       <div className="barra-acoes">
         <div>
           <h2>Notas emitidas</h2>
-          <span>{dados ? `${dados.total} ${dados.total === 1 ? 'nota' : 'notas'}` : 'Carregando…'}</span>
+          <span>{dados ? `${dados.total} ${dados.total === 1 ? 'nota' : 'notas'}${temFiltro ? (dados.total === 1 ? ' encontrada' : ' encontradas') : ''}` : 'Carregando…'}</span>
         </div>
         <div className="barra-botoes">
+          <button type="button" className="btn-secundario" onClick={() => setExportando(true)}>Exportar para o contador</button>
           <button
             type="button" className="btn-secundario" onClick={() => setInutilizando(true)} disabled={!emissor?.podeInutilizar}
             title={emissor?.podeInutilizar ? '' : 'A inutilização exige emitente com CNPJ'}
@@ -182,13 +264,36 @@ export function Notas({ emissor }) {
       </div>
 
       <div className="conteudo-lista">
+        <div className="filtros-notas">
+          <label className="campo filtro-busca"><span className="rotulo">Buscar</span>
+            <input type="search" value={filtros.busca} onChange={filtrar('busca')} placeholder="Número, destinatário, CPF/CNPJ ou chave" />
+          </label>
+          <label className="campo"><span className="rotulo">De</span><input type="date" value={filtros.de} onChange={filtrar('de')} /></label>
+          <label className="campo"><span className="rotulo">Até</span><input type="date" value={filtros.ate} onChange={filtrar('ate')} /></label>
+          <label className="campo"><span className="rotulo">Situação</span>
+            <select value={filtros.status} onChange={filtrar('status')}>
+              {SITUACOES.map(([v, t]) => <option key={v} value={v}>{t}</option>)}
+            </select>
+          </label>
+          {temFiltro && <button type="button" className="btn-texto" onClick={() => { setFiltros(FILTROS_VAZIOS); setBuscaAplicada(''); setPagina(1); }}>Limpar filtros</button>}
+        </div>
+
         {aviso && <div className={`aviso-local ${aviso.ok ? 'ok' : 'falha'}`}>{aviso.texto}</div>}
         {erro && <div className="aviso-local falha">{erro}</div>}
         {dados && dados.notas.length === 0 && (
           <div className="vazio">
             <div className="vazio-icone">🧾</div>
-            <h3>Nenhuma nota ainda</h3>
-            <p>As notas enviadas à SEFAZ aparecem aqui, inclusive as rejeitadas.</p>
+            {temFiltro ? (
+              <>
+                <h3>Nenhuma nota encontrada</h3>
+                <p>Nenhuma nota combina com esses filtros.</p>
+              </>
+            ) : (
+              <>
+                <h3>Nenhuma nota ainda</h3>
+                <p>As notas enviadas à SEFAZ aparecem aqui, inclusive as rejeitadas.</p>
+              </>
+            )}
           </div>
         )}
         {dados && dados.notas.length > 0 && (
@@ -215,9 +320,17 @@ export function Notas({ emissor }) {
             </tbody>
           </table>
         )}
+        {paginas > 1 && (
+          <div className="paginacao">
+            <button type="button" className="btn-secundario" onClick={() => setPagina(pagina - 1)} disabled={pagina <= 1}>‹ Anterior</button>
+            <span>Página {pagina} de {paginas}</span>
+            <button type="button" className="btn-secundario" onClick={() => setPagina(pagina + 1)} disabled={pagina >= paginas}>Próxima ›</button>
+          </div>
+        )}
       </div>
 
-      {aberta && <DetalheNota id={aberta} onFechar={() => setAberta(null)} onAlterada={carregar} />}
+      {aberta && <DetalheNota id={aberta} onFechar={() => setAberta(null)} onAlterada={carregar} onDuplicar={onDuplicar} />}
+      {exportando && <JanelaExportar onFechar={() => setExportando(false)} />}
       {inutilizando && (
         <JanelaInutilizar
           onFechar={() => setInutilizando(false)}

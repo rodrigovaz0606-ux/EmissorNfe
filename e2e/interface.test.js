@@ -323,6 +323,140 @@ describe('interface (Edge + SEFAZ simulada)', () => {
     await itens.getByLabel('Produto cadastrado').locator('option', { hasText: 'FEIJAO CARIOCA (FEIJAO01)' }).waitFor({ state: 'attached' });
   });
 
+  test('cadastra cliente, usa na nota e salva destinatário digitado', async () => {
+    await pagina.getByRole('tab', { name: 'Clientes' }).click();
+    await pagina.getByText('Nenhum cliente cadastrado').first().waitFor();
+    await pagina.getByRole('button', { name: '+ Novo cliente' }).click();
+    const janela = pagina.getByRole('dialog');
+    await janela.getByRole('button', { name: 'Cadastrar cliente' }).waitFor();
+    assert.equal(await janela.getByRole('button', { name: 'Cadastrar cliente' }).isDisabled(), true);
+    await janela.getByLabel('CPF').fill('390.533.447-05');
+    await janela.getByLabel('Nome / Razão social').fill('joao comprador');
+    await janela.getByLabel('Logradouro').fill('RUA DAS FLORES');
+    await janela.getByLabel('Bairro').fill('CENTRO');
+    await janela.getByLabel('Município').fill('GOIANIA');
+    await janela.getByLabel('Cód. IBGE').fill('5208707');
+    await janela.getByRole('button', { name: 'Cadastrar cliente' }).click();
+    await pagina.getByText('Cliente JOAO COMPRADOR cadastrado.').waitFor();
+    assert.match(await pagina.locator('.tabela-notas').innerText(), /JOAO COMPRADOR\s+390\.533\.447-05\s+GOIANIA \/ GO/);
+    await print('09-clientes');
+
+    await pagina.getByRole('tab', { name: 'Emitir nota' }).click();
+    const dest = pagina.locator('#destinatario');
+    await dest.getByLabel('Cliente cadastrado').selectOption({ label: 'JOAO COMPRADOR (390.533.447-05)' });
+    assert.equal(await dest.getByLabel('Nome / Razão social').inputValue(), 'JOAO COMPRADOR');
+    assert.equal(await dest.getByLabel('CPF').inputValue(), '390.533.447-05');
+    assert.equal(await dest.getByLabel('Logradouro').inputValue(), 'RUA DAS FLORES');
+
+    // destinatário digitado vai para o cadastro; documento repetido pergunta e atualiza
+    await dest.getByLabel('CPF').fill('529.982.247-25');
+    await dest.getByLabel('Nome / Razão social').fill('MARIA COMPRADORA');
+    await dest.getByRole('button', { name: 'Salvar no cadastro de clientes' }).click();
+    await dest.getByText('Cliente MARIA COMPRADORA cadastrado.').waitFor();
+    await dest.getByLabel('Cliente cadastrado').locator('option', { hasText: 'MARIA COMPRADORA' }).waitFor({ state: 'attached' });
+  });
+
+  test('filtra as notas por situação e por busca', async () => {
+    await pagina.getByRole('tab', { name: 'Notas emitidas' }).click();
+    const linhas = pagina.locator('.tabela-notas tbody tr');
+    await linhas.first().waitFor();
+    await pagina.getByLabel('Situação').selectOption({ label: 'Rejeitada' });
+    await pagina.getByText('Nenhuma nota encontrada').waitFor();
+    await pagina.getByLabel('Situação').selectOption({ label: 'Cancelada' });
+    await linhas.first().getByText('Cancelada').waitFor();
+    await pagina.getByRole('button', { name: 'Limpar filtros' }).click();
+    await pagina.getByLabel('Buscar').fill('nome que nao existe');
+    await pagina.getByText('Nenhuma nota encontrada').waitFor();
+    await pagina.getByLabel('Buscar').fill('comprador');
+    await linhas.first().waitFor();
+    assert.equal(await linhas.count(), 1);
+    await print('10-filtros');
+    await pagina.getByRole('button', { name: 'Limpar filtros' }).click();
+  });
+
+  test('duplica uma nota: abre com os dados dela e o próximo número', async () => {
+    await pagina.locator('.tabela-notas tbody tr').first().click();
+    await pagina.getByRole('dialog').getByRole('button', { name: 'Duplicar nota' }).click();
+    await pagina.getByRole('heading', { name: /Nota fiscal nº 2\b/ }).waitFor();
+    assert.equal(await pagina.getByRole('tab', { name: 'Emitir nota', selected: true }).count(), 1);
+    assert.equal(await pagina.locator('#destinatario').getByLabel('Nome / Razão social').inputValue(), 'COMPRADOR TESTE');
+    const itens = pagina.locator('#itens');
+    assert.equal(await itens.getByLabel('Descrição').inputValue(), 'SOJA EM GRAOS');
+    assert.equal(await itens.getByLabel('Quantidade').inputValue(), '500');
+    await pagina.getByText('Todos os campos obrigatórios preenchidos').waitFor();
+    await pagina.getByRole('button', { name: 'Emitir nota' }).click();
+    await pagina.locator('.resultado').getByText('Nota autorizada').waitFor({ timeout: 15000 });
+  });
+
+  test('tipo de nota: devolução pede a nota referenciada e passa no schema', async () => {
+    const chave = await pagina.evaluate(() => fetch('/api/notas').then((r) => r.json()).then((d) => d.notas[0].chave));
+    await pagina.getByRole('button', { name: 'Nova nota' }).click();
+    await pagina.getByRole('heading', { name: /Nota fiscal nº 3\b/ }).waitFor();
+    const ident = pagina.locator('#identificacao');
+    assert.equal(await ident.getByLabel('Natureza da operação').inputValue(), 'VENDA DE PRODUCAO DO ESTABELECIMENTO');
+    assert.equal(await ident.getByLabel('Chave da NF-e referenciada').count(), 0);
+
+    const itens = pagina.locator('#itens');
+    await itens.getByLabel('Produto cadastrado').selectOption({ label: 'SOJA EM GRAOS (SOJA01)' });
+    await ident.getByLabel('Tipo de nota').selectOption({ label: 'Devolução de compra (saída)' });
+    assert.equal(await ident.getByLabel('Natureza da operação').inputValue(), 'DEVOLUCAO DE COMPRA');
+    assert.equal(await itens.getByLabel('CFOP').inputValue(), '5201');
+    assert.equal(await pagina.locator('#pagamento').getByLabel('Forma de pagamento').inputValue(), '90');
+    await pagina.locator('.pendencias').getByText('Chave da NF-e referenciada').waitFor({ state: 'attached' });
+    await ident.getByLabel('Chave da NF-e referenciada').fill(chave);
+    await print('11-devolucao');
+
+    await pagina.locator('#destinatario').getByLabel('Cliente cadastrado').selectOption({ label: 'JOAO COMPRADOR (390.533.447-05)' });
+    await pagina.getByText('Todos os campos obrigatórios preenchidos').waitFor();
+    await pagina.getByRole('button', { name: 'Validar' }).click();
+    await pagina.locator('.resultado').getByText('Pronta para emitir').waitFor();
+    assert.match(await pagina.locator('.resultado').innerText(), /Schema \(XSD\)\s+Estrutura válida/);
+
+    // produto escolhido depois segue o CFOP da operação, não o padrão do cadastro
+    await itens.getByLabel('Produto cadastrado').selectOption({ label: 'SOJA EM GRAOS (SOJA01)' });
+    assert.equal(await itens.locator('.item.aberto').getByLabel('CFOP').inputValue(), '5201');
+    await pagina.getByRole('button', { name: 'Nova nota' }).click();
+    await ident.getByLabel('Chave da NF-e referenciada').waitFor({ state: 'detached' });
+  });
+
+  test('exporta o ZIP para o contador e avisa quando não há nada', async () => {
+    await pagina.getByRole('tab', { name: 'Notas emitidas' }).click();
+    await pagina.getByRole('button', { name: 'Exportar para o contador' }).click();
+    const janela = pagina.getByRole('dialog');
+    await janela.getByRole('button', { name: 'Mês passado' }).click();
+    await janela.getByRole('button', { name: 'Baixar ZIP' }).click();
+    await janela.getByText('Nenhum documento com valor fiscal nesse período.').waitFor();
+    await janela.getByRole('button', { name: 'Este mês' }).click();
+    const [resposta] = await Promise.all([
+      pagina.waitForResponse((r) => r.url().includes('/api/notas/exportar')),
+      janela.getByRole('button', { name: 'Baixar ZIP' }).click(),
+    ]);
+    assert.equal(resposta.status(), 200);
+    assert.equal(resposta.headers()['content-type'], 'application/zip');
+    await janela.getByText('Arquivo gerado.').waitFor();
+    await print('12-exportar');
+    await janela.getByRole('button', { name: 'Fechar' }).first().click();
+  });
+
+  test('painel mostra os números do mês e abre a lista filtrada', async () => {
+    await pagina.getByRole('tab', { name: 'Painel' }).click();
+    const indicadores = pagina.locator('.painel-indicadores');
+    await indicadores.waitFor();
+    const texto = await indicadores.innerText();
+    assert.match(texto, /Total autorizado no mês\s+R\$\s*66\.250,00/);
+    assert.match(texto, /Canceladas\s+1/);
+    assert.equal(await pagina.locator('.barra').count(), 1);
+    await pagina.getByText('Nenhum certificado vence nos próximos 30 dias.').waitFor();
+    await pagina.locator('.coluna-barra').last().hover();
+    await print('13-painel');
+
+    await indicadores.getByRole('button', { name: /Canceladas/ }).click();
+    await pagina.getByRole('tab', { name: 'Notas emitidas', selected: true }).waitFor();
+    assert.equal(await pagina.getByLabel('Situação').inputValue(), 'cancelada');
+    await pagina.locator('.tabela-notas tbody tr').first().getByText('Cancelada').waitFor();
+    assert.equal(await pagina.locator('.tabela-notas tbody tr').count(), 1);
+  });
+
   test('troca de produtor separa notas, produtos e numeração', async () => {
     await pagina.locator('.produtor-atual').click(); // atalho do topo para a tela de produtores
     await pagina.getByRole('button', { name: '+ Adicionar produtor' }).click();
@@ -343,7 +477,7 @@ describe('interface (Edge + SEFAZ simulada)', () => {
     const cartaoCpf = pagina.locator('.cartao-produtor[data-documento="52998224725"]');
     await cartaoCpf.getByRole('button', { name: 'Usar este produtor' }).click();
     await pagina.getByRole('tab', { name: 'Notas emitidas' }).click();
-    await pagina.locator('.tabela-notas tbody tr').first().getByText('Cancelada').waitFor();
+    await pagina.locator('.tabela-notas tbody tr').first().getByText('Autorizada').waitFor();
     await pagina.getByRole('tab', { name: 'Produtores' }).click();
     await cartaoCpf.getByText('Em uso').waitFor();
     await print('06-produtores');
