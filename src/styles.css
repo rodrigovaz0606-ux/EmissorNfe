@@ -372,7 +372,37 @@ a.btn-secundario, a.btn-perigo { text-decoration: none; display: inline-block; }
 .cartao-acesso h2 { font-size: 20px; }
 .acesso-subtitulo { color: var(--suave); margin: 6px 0 18px; line-height: 1.45; }
 .form-acesso { display: flex; flex-direction: column; gap: 14px; }
-.form-acesso input[type='file'] { padding: 8px; border: 1px dashed var(--borda-forte); border-radius: 8px; background: #f8fafb; }
+.seletor-arquivo {
+  position: relative; display: flex; align-items: center; gap: 12px; padding: 12px;
+  border: 1px solid var(--borda-forte); border-radius: 10px; background: #f8fafb; cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+.seletor-arquivo:hover { border-color: var(--cor); background: #f0faf8; }
+.seletor-arquivo:focus-within { border-color: var(--cor); box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.15); }
+.seletor-arquivo:has(input:disabled) { cursor: not-allowed; opacity: 0.6; }
+.seletor-arquivo.escolhido { border-color: var(--cor); background: #f0faf8; }
+/* Escondido só visualmente: continua acessível pelo teclado e por leitores de tela. */
+.campo .seletor-arquivo input[type='file'] {
+  position: absolute; width: 1px; height: 1px; padding: 0; border: 0; opacity: 0; overflow: hidden; clip-path: inset(50%);
+}
+.seletor-icone {
+  flex: none; width: 40px; height: 40px; display: grid; place-items: center; border-radius: 9px;
+  background: white; border: 1px solid var(--borda); color: var(--suave);
+}
+.seletor-arquivo.escolhido .seletor-icone { background: var(--cor-clara); border-color: transparent; color: var(--cor-escura); }
+.seletor-texto { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.seletor-texto strong { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.seletor-texto small { color: var(--suave); font-size: 12px; }
+.seletor-acao {
+  flex: none; padding: 8px 12px; border: 1px solid var(--borda-forte); border-radius: 8px;
+  background: white; color: var(--cor-escura); font-size: 13px; font-weight: 650; white-space: nowrap;
+}
+.seletor-arquivo:hover .seletor-acao { border-color: var(--cor); }
+@media (max-width: 480px) {
+  .seletor-arquivo { flex-wrap: wrap; }
+  .seletor-texto { flex-basis: calc(100% - 52px); }
+  .seletor-acao { width: 100%; text-align: center; }
+}
 .btn-primario.largo { width: 100%; padding: 12px; margin-top: 4px; }
 .carregando-tela { padding: 48px; text-align: center; color: var(--suave); }
 

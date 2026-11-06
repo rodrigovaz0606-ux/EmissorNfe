@@ -8,6 +8,7 @@ export const formatarDoc = (d = '') =>
 
 const data = (iso) => (iso ? new Date(iso).toLocaleDateString('pt-BR') : '—');
 const diasAte = (iso) => (iso ? Math.floor((new Date(iso) - Date.now()) / 86400000) : null);
+const tamanhoArquivo = (bytes) => `${(bytes / 1024).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} KB`;
 
 // Envio do certificado A1 (.pfx/.p12) com a senha. Usado para adicionar e para renovar.
 function JanelaCertificado({ titulo, explicacao, textoBotao, onEnviar, onFechar }) {
@@ -35,8 +36,22 @@ function JanelaCertificado({ titulo, explicacao, textoBotao, onEnviar, onFechar 
       <form onSubmit={enviar} className="form-acesso">
         <div className="explicacao">{explicacao}</div>
         <div className="campo">
-          <label className="rotulo" htmlFor={idArq}>Arquivo do certificado A1 (.pfx ou .p12)</label>
-          <input id={idArq} type="file" accept=".pfx,.p12,application/x-pkcs12" onChange={(e) => setArquivo(e.target.files[0] ?? null)} required />
+          <label className="rotulo" htmlFor={idArq}>Arquivo do certificado A1</label>
+          <label className={`seletor-arquivo ${arquivo ? 'escolhido' : ''}`}>
+            <input id={idArq} type="file" accept=".pfx,.p12,application/x-pkcs12" onChange={(e) => setArquivo(e.target.files[0] ?? null)} disabled={enviando} required />
+            <span className="seletor-icone" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                {arquivo
+                  ? <path d="M20 6 9 17l-5-5" />
+                  : <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></>}
+              </svg>
+            </span>
+            <span className="seletor-texto">
+              <strong>{arquivo ? arquivo.name : 'Nenhum certificado selecionado'}</strong>
+              <small>{arquivo ? tamanhoArquivo(arquivo.size) : 'Arquivo .pfx ou .p12'}</small>
+            </span>
+            <span className="seletor-acao">{arquivo ? 'Trocar' : 'Selecionar arquivo'}</span>
+          </label>
         </div>
         <div className="campo">
           <label className="rotulo" htmlFor={idSenha}>Senha do certificado</label>
