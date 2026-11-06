@@ -62,7 +62,8 @@ const print = async (nome) => PRINTS && pagina.screenshot({ path: path.join(PRIN
 
 describe('interface (Edge + SEFAZ simulada)', () => {
   before(async () => {
-    for (const f of [DB, `${DB}-wal`, `${DB}-shm`, path.join(path.dirname(DB), 'chave-mestra.key')]) fs.rmSync(f, { force: true });
+    // Só o banco de teste. Nunca apague data/chave-mestra.key: é a chave real (o teste usa NFE_CHAVE_MESTRA).
+    for (const f of [DB, `${DB}-wal`, `${DB}-shm`]) fs.rmSync(f, { force: true });
     if (!fs.existsSync(BINARIO)) throw new Error(`Backend não compilado: ${BINARIO} (rode npm run e2e)`);
     servidor = spawn(BINARIO, ['servidor'], {
       env: { ...process.env, PORT: String(PORTA), NFE_SEFAZ_SIMULADA: '1', NFE_DB: DB, NFE_CHAVE_MESTRA: 'ab'.repeat(32) },
