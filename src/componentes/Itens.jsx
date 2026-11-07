@@ -2,7 +2,7 @@ import React from 'react';
 import { Secao, Campo } from './campos.jsx';
 import { Tributos } from './Tributos.jsx';
 import { CFOPS, UNIDADES } from '../opcoes.js';
-import { itemVazio, totaisItem, moeda, num, digitos, itemDoProduto, produtoDoItem, itemEstaVazio, cfopDoTipo } from '../modelo.js';
+import { itemVazio, totaisItem, moeda, num, digitos, itemDoProduto, produtoDoItem, itemEstaVazio, cfopDoTipo, formatarQuantidade } from '../modelo.js';
 
 function ItemCartao({ item, indice, aberto, onAlternar, onChange, onRemover, podeRemover, onSalvarProduto }) {
   const s = (campo) => (v) => onChange({ ...item, [campo]: v });
@@ -33,7 +33,7 @@ function ItemCartao({ item, indice, aberto, onAlternar, onChange, onRemover, pod
           {(num(item.vUnCom) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 4 })}
         </span>
         <strong className="item-total">{moeda(t.vProd)}</strong>
-        <span className="seta">{aberto ? '▴' : '▾'}</span>
+        <span className="seta" aria-hidden="true">▾</span>
       </button>
 
       {aberto && (
@@ -89,7 +89,7 @@ function EscolherProduto({ produtos, onEscolher }) {
         onChange={(e) => { const p = produtos.find((x) => String(x.id) === e.target.value); if (p) onEscolher(p); }}
       >
         <option value="">{produtos.length === 0 ? 'Nenhum produto cadastrado' : 'Adicionar da lista…'}</option>
-        {produtos.map((p) => <option key={p.id} value={p.id}>{p.xProd} ({p.cProd})</option>)}
+        {produtos.map((p) => <option key={p.id} value={p.id}>{p.xProd} ({p.cProd}){p.controlaEstoque ? ` · ${formatarQuantidade(p.saldo)} ${p.uCom}` : ''}</option>)}
       </select>
     </div>
   );

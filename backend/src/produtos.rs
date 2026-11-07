@@ -2,7 +2,9 @@
 //! unidade, preço e tributação). O formato é o mesmo de um item do formulário da nota,
 //! para a interface copiar o produto direto para o item.
 
+use crate::db::{NovoMovimento, TipoMovimento};
 use crate::emissao::{Ativo, Contexto, ErroNegocio};
+use crate::estoque::{ler_quantidade, para_unidades};
 use anyhow::Result;
 use serde_json::{Map, Value, json};
 
@@ -86,6 +88,12 @@ pub fn validar_produto(v: &Value) -> Result<Value> {
         return Err(negocio(format!("Preço unitário inválido: {v_un_com}")));
     }
 
+    let controla_estoque = v.get("controlaEstoque").and_then(Value::as_bool).unwrap_or(false);
+    let estoque_minimo = texto(v, "estoqueMinimo");
+    if !estoque_minimo.is_empty() && ler_quantidade(&estoque_minimo).is_none() {
+        return Err(negocio(format!("Estoque mínimo inválido: {estoque_minimo}")));
+    }
+
     let vazio = Value::Object(Map::new());
     let icms = v.get("icms").unwrap_or(&vazio);
     let pis = v.get("pis").unwrap_or(&vazio);
@@ -103,6 +111,8 @@ pub fn validar_produto(v: &Value) -> Result<Value> {
         "CFOP": cfop,
         "uCom": u_com,
         "vUnCom": v_un_com,
+        "controlaEstoque": controla_estoque,
+        "estoqueMinimo": estoque_minimo,
         "icms": {
             "orig": opcao(texto(icms, "orig"), ORIGENS, "0", "Origem da mercadoria")?,
             "pICMS": aliquota(icms, "pICMS", cst_icms == "00", "ICMS")?,
@@ -116,6 +126,13 @@ pub fn validar_produto(v: &Value) -> Result<Value> {
 /// Cria (id = None) ou altera um produto. O código não pode repetir.
 pub fn salvar_produto(id: Option<i64>, dados: &Value, ctx: &Contexto, ativo: &Ativo) -> Result<Value> {
     let mut p = validar_produto(dados)?;
+    // Saldo inicial só vale ao criar; depois, o saldo muda por movimentos.
+    let inicial = texto(dados, "estoqueInicial");
+    let inicial = if id.is_none() && p["controlaEstoque"] == json!(true) && !inicial.is_empty() {
+        Some(ler_quantidade(&inicial).ok_or_else(|| negocio(format!("Saldo inicial inválido: {inicial}")))?)
+    } else {
+        None
+    };
     let c_prod = p["cProd"].as_str().unwrap_or_default().to_string();
     let x_prod = p["xProd"].as_str().unwrap_or_default().to_string();
     let repo = ctx.repo();
@@ -128,6 +145,17 @@ pub fn salvar_produto(id: Option<i64>, dados: &Value, ctx: &Contexto, ativo: &At
         Some(_) => return Err(negocio("Produto não encontrado.")),
         None => repo.inserir_produto(ativo.id, &c_prod, &x_prod, &json)?,
     };
+    if let Some(q) = inicial.filter(|q| *q > 0.0) {
+        repo.registrar_movimentos(&[NovoMovimento {
+            produtor_id: ativo.id,
+            produto_id: id,
+            tipo: TipoMovimento::Ajuste,
+            quantidade: para_unidades(q),
+            nota_id: None,
+            usuario_id: None,
+            observacao: Some("Saldo inicial".into()),
+        }])?;
+    }
     p["id"] = Value::from(id);
     Ok(p)
 }

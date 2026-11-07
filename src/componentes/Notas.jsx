@@ -2,6 +2,7 @@ import React from 'react';
 import { api } from '../api.js';
 import { formatarChave } from '../modelo.js';
 import { Janela, JanelaTexto } from './Janela.jsx';
+import { EsqueletoTabela } from './Movimento.jsx';
 
 const STATUS = {
   autorizada: ['Autorizada', 'ok'],
@@ -280,6 +281,7 @@ export function Notas({ emissor, filtroInicial, onDuplicar }) {
 
         {aviso && <div className={`aviso-local ${aviso.ok ? 'ok' : 'falha'}`}>{aviso.texto}</div>}
         {erro && <div className="aviso-local falha">{erro}</div>}
+        {!dados && !erro && <EsqueletoTabela />}
         {dados && dados.notas.length === 0 && (
           <div className="vazio">
             <div className="vazio-icone">🧾</div>

@@ -1,6 +1,6 @@
 import React from 'react';
 import { api, EVENTO_SESSAO } from './api.js';
-import { notaVazia, totaisNota, pendencias, avisos, paraPayload, notaDoPayload, digitos } from './modelo.js';
+import { notaVazia, totaisNota, pendencias, avisos, avisosEstoque, paraPayload, notaDoPayload, digitos } from './modelo.js';
 import { Identificacao } from './componentes/Identificacao.jsx';
 import { Emitente } from './componentes/Emitente.jsx';
 import { Destinatario } from './componentes/Destinatario.jsx';
@@ -14,6 +14,7 @@ import { Painel } from './componentes/Painel.jsx';
 import { Produtores, formatarDoc } from './componentes/Produtores.jsx';
 import { Admin, JanelaSenha } from './componentes/Admin.jsx';
 import { TelaLogin, TelaConfiguracao } from './componentes/Acesso.jsx';
+import { Abas, BotaoTema } from './componentes/Movimento.jsx';
 
 const ABAS_EMISSAO = [['painel', 'Painel'], ['emitir', 'Emitir nota'], ['notas', 'Notas emitidas'], ['clientes', 'Clientes'], ['produtos', 'Produtos']];
 // Rascunho da nota por produtor (trocar de produtor não mistura os rascunhos).
@@ -130,7 +131,7 @@ function Emissao({ produtor, emissor, onVerNotas, produtos, carregarProdutos, cl
 
   const totais = totaisNota(nota);
   const listaPendencias = pendencias(nota);
-  const listaAvisos = avisos(nota);
+  const listaAvisos = [...avisos(nota), ...avisosEstoque(nota, produtos)];
   const homologacao = emissor?.ambiente === 'homologacao';
 
   async function executar(modo) {
@@ -145,6 +146,7 @@ function Emissao({ produtor, emissor, onVerNotas, produtos, carregarProdutos, cl
       } else {
         const r = modo === 'validar' ? await api.validar(payload) : await api.emitir(payload);
         setResultado({ ...r, modo });
+        if (modo === 'emitir' && r.estoque) carregarProdutos(); // o saldo mudou
       }
     } catch (e) {
       setResultado({ erro: e.message, modo });
@@ -168,7 +170,10 @@ function Emissao({ produtor, emissor, onVerNotas, produtos, carregarProdutos, cl
     if (existente && !window.confirm(`Já existe o produto ${existente.cProd} (${existente.xProd}). Substituir pelos dados deste item?`)) {
       return 'Cadastro mantido como estava.';
     }
-    const r = existente ? await api.alterarProduto(existente.id, p) : await api.criarProduto(p);
+    // O item da nota não tem os campos de estoque: mantém os que já estavam no cadastro.
+    const r = existente
+      ? await api.alterarProduto(existente.id, { ...p, controlaEstoque: existente.controlaEstoque, estoqueMinimo: existente.estoqueMinimo })
+      : await api.criarProduto(p);
     await carregarProdutos();
     return existente ? `Produto ${r.cProd} atualizado no cadastro.` : `Produto ${r.cProd} cadastrado.`;
   }
@@ -282,11 +287,7 @@ function Principal({ estado, onEstado, onSair }) {
           </div>
           <span className="selo-ambiente" title="As notas não têm valor fiscal">HOMOLOGAÇÃO</span>
         </div>
-        <nav className="abas" role="tablist">
-          {abas.map(([a, rotulo]) => (
-            <button key={a} type="button" role="tab" aria-selected={abaValida === a} className={abaValida === a ? 'ativa' : ''} onClick={() => { setFiltroNotas(null); trocarAba(a); }}>{rotulo}</button>
-          ))}
-        </nav>
+        <Abas abas={abas} ativa={abaValida} onTrocar={(a) => { setFiltroNotas(null); trocarAba(a); }} />
         <div className="topo-direita">
           {produtor ? (
             <button type="button" className="produtor-atual" onClick={() => trocarAba('produtores')} title="Trocar de produtor">
@@ -297,6 +298,7 @@ function Principal({ estado, onEstado, onSair }) {
             <span className="produtor-atual sem-produtor">Nenhum produtor selecionado</span>
           )}
           {produtor && <StatusSefaz />}
+          <BotaoTema />
           <MenuUsuario usuario={usuario} onSenha={() => setTrocandoSenha(true)} onSair={onSair} />
         </div>
       </header>
@@ -307,13 +309,15 @@ function Principal({ estado, onEstado, onSair }) {
       {estado.aviso && <div className="faixa-erro">{estado.aviso}</div>}
       {erroEmissor && <div className="faixa-erro">Não foi possível carregar o produtor: {erroEmissor}</div>}
 
+      {/* A chave recria o bloco a cada aba, e isso dispara a animação de entrada. */}
+      <div className="transicao-pagina" key={abaValida}>
       {abaValida === 'emitir' && produtor && (
         <Emissao
           produtor={produtor} emissor={emissor} onVerNotas={() => verNotas()} produtos={produtos} carregarProdutos={carregarProdutos}
           clientes={clientes} carregarClientes={carregarClientes}
         />
       )}
-      {abaValida === 'painel' && produtor && <Painel onVerNotas={verNotas} onVerProdutores={() => trocarAba('produtores')} />}
+      {abaValida === 'painel' && produtor && <Painel onVerNotas={verNotas} onVerProdutores={() => trocarAba('produtores')} onVerProdutos={() => trocarAba('produtos')} />}
       {abaValida === 'notas' && <Notas emissor={emissor} filtroInicial={filtroNotas} onDuplicar={duplicarNota} />}
       {abaValida === 'clientes' && <Clientes onAlterados={carregarClientes} />}
       {abaValida === 'produtos' && <Produtos onAlterados={carregarProdutos} />}
@@ -325,6 +329,7 @@ function Principal({ estado, onEstado, onSair }) {
         />
       )}
       {abaValida === 'admin' && <Admin usuario={usuario} />}
+      </div>
       {trocandoSenha && <JanelaSenha onFechar={() => setTrocandoSenha(false)} />}
     </div>
   );

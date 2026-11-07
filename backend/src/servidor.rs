@@ -17,6 +17,7 @@ use crate::contas::{self, SessaoAtual};
 use crate::danfe::gerar_danfe;
 use crate::db::{FiltroNotas, Repositorio};
 use crate::emissao::{self, Ativo, Contexto, ErroNegocio, SefazReal};
+use crate::estoque;
 use crate::fiscal::config::carregar_config;
 use crate::fiscal::soap::ErroRede;
 use crate::produtos;
@@ -531,6 +532,23 @@ async fn excluir_produto(State(ctx): State<Ctx>, ComProdutor(a): ComProdutor, Pa
     }
 }
 
+async fn estoque_do_produto(State(ctx): State<Ctx>, ComProdutor(a): ComProdutor, Path(id): Path<String>) -> Result<Response, ErroApi> {
+    let id = id_de(&id);
+    Ok(json_ok(bloqueante(&ctx, move |c| estoque::consultar(c, &a, id)).await?))
+}
+
+async fn movimentar_estoque(
+    State(ctx): State<Ctx>,
+    Logado(s): Logado,
+    ComProdutor(a): ComProdutor,
+    Path(id): Path<String>,
+    corpo: Bytes,
+) -> Result<Response, ErroApi> {
+    let (id, dados) = (id_de(&id), corpo_json(&corpo)?);
+    let v = bloqueante(&ctx, move |c| estoque::movimentar_manual(c, &a, s.usuario.id, id, &dados)).await?;
+    Ok((StatusCode::CREATED, axum::Json(v)).into_response())
+}
+
 async fn listar_clientes(State(ctx): State<Ctx>, ComProdutor(a): ComProdutor) -> Result<Response, ErroApi> {
     Ok(json_ok(Value::Array(bloqueante(&ctx, move |c| c.repo().listar_clientes(a.id)).await?)))
 }
@@ -593,6 +611,7 @@ pub fn criar_app(ctx: Ctx, dist: Option<PathBuf>) -> Router {
         .route("/inutilizacoes", get(inutilizacoes).post(inutilizar))
         .route("/produtos", get(listar_produtos).post(criar_produto))
         .route("/produtos/{id}", put(alterar_produto).delete(excluir_produto))
+        .route("/produtos/{id}/estoque", get(estoque_do_produto).post(movimentar_estoque))
         .route("/clientes", get(listar_clientes).post(criar_cliente))
         .route("/clientes/{id}", put(alterar_cliente).delete(excluir_cliente))
         .layer(axum::middleware::map_response(sem_cache))

@@ -1,10 +1,11 @@
 import React from 'react';
 import { api } from '../api.js';
-import { Campo } from './campos.jsx';
+import { Campo, Selecao } from './campos.jsx';
+import { EsqueletoTabela } from './Movimento.jsx';
 import { Janela } from './Janela.jsx';
 import { Tributos } from './Tributos.jsx';
 import { CFOPS, UNIDADES, CST_ICMS } from '../opcoes.js';
-import { produtoVazio, num, digitos } from '../modelo.js';
+import { produtoVazio, num, digitos, formatarQuantidade, estoqueBaixo } from '../modelo.js';
 
 const preco = (v) => {
   const n = num(v);
@@ -12,6 +13,86 @@ const preco = (v) => {
 };
 const ncmFormatado = (n) => (n?.length === 8 ? `${n.slice(0, 4)}.${n.slice(4, 6)}.${n.slice(6)}` : n);
 const nomeCst = (cst) => CST_ICMS.find(([c]) => c === cst)?.[1].split(' — ')[1] ?? cst;
+
+const TIPOS_MOVIMENTO = {
+  entrada: 'Entrada', saida: 'Saída', ajuste: 'Ajuste de contagem', nota: 'Nota', estorno: 'Cancelamento de nota',
+};
+const dataHora = (s) => new Date(s.replace(' ', 'T')).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+
+// Saldo, novo movimento e histórico de um produto.
+function JanelaEstoque({ produto, onAlterado, onFechar }) {
+  const [dados, setDados] = React.useState(null);
+  const [tipo, setTipo] = React.useState('entrada');
+  const [quantidade, setQuantidade] = React.useState('');
+  const [observacao, setObservacao] = React.useState('');
+  const [erro, setErro] = React.useState('');
+  const [salvando, setSalvando] = React.useState(false);
+
+  const carregar = React.useCallback(() => api.estoqueProduto(produto.id).then(setDados).catch((e) => setErro(e.message)), [produto.id]);
+  React.useEffect(() => { carregar(); }, [carregar]);
+
+  async function registrar(e) {
+    e.preventDefault();
+    setSalvando(true);
+    setErro('');
+    try {
+      await api.movimentarEstoque(produto.id, { tipo, quantidade, observacao });
+      setQuantidade('');
+      setObservacao('');
+      await carregar();
+      onAlterado();
+    } catch (e2) {
+      setErro(e2.message);
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  const baixo = dados && estoqueBaixo({ controlaEstoque: true, saldo: dados.saldo, estoqueMinimo: String(dados.minimo) });
+  const quantidadeOk = num(quantidade) > 0 || (tipo === 'ajuste' && num(quantidade) === 0);
+  return (
+    <Janela titulo={`Estoque de ${produto.xProd}`} onFechar={onFechar} largura={760}>
+      {dados && (
+        <div className="estoque-saldo">
+          <span className="indicador-rotulo">Saldo atual</span>
+          <strong className="indicador-valor">{formatarQuantidade(dados.saldo)} {dados.uCom}</strong>
+          {baixo && <span className="selo selo-alerta">⚠ Abaixo do mínimo de {formatarQuantidade(dados.minimo)}</span>}
+        </div>
+      )}
+      <form onSubmit={registrar} className="grade form-estoque">
+        <Selecao rotulo="Movimento" valor={tipo} onChange={setTipo} largura="m" opcoes={[['entrada', 'Entrada'], ['saida', 'Saída'], ['ajuste', 'Ajuste de contagem']]} />
+        <Campo
+          rotulo={tipo === 'ajuste' ? 'Saldo contado' : 'Quantidade'} valor={quantidade} onChange={setQuantidade} largura="m" inputMode="decimal" obrigatorio
+          dica={tipo === 'ajuste' ? 'O saldo passa a ser este número' : undefined}
+        />
+        <Campo rotulo="Observação" valor={observacao} onChange={setObservacao} largura="m" maxLength={200} dica="Opcional" />
+        <div className="l-cheia janela-botoes">
+          <button type="submit" className="btn-primario" disabled={salvando || !quantidadeOk}>{salvando ? 'Registrando…' : 'Registrar movimento'}</button>
+        </div>
+      </form>
+      {erro && <div className="faixa-erro-local" role="alert">{erro}</div>}
+
+      <h3 className="subtitulo">Histórico</h3>
+      {dados && dados.movimentos.length === 0 && <p className="vazio-pequeno">Nenhum movimento ainda.</p>}
+      {dados && dados.movimentos.length > 0 && (
+        <table className="tabela-movimentos">
+          <thead><tr><th>Data</th><th>Movimento</th><th className="direita">Quantidade</th><th className="direita">Saldo</th><th>Detalhe</th></tr></thead>
+          <tbody>
+            {dados.movimentos.map((m) => (
+              <tr key={m.id}>
+                <td>{dataHora(m.criado_em)}</td>
+                <td>{TIPOS_MOVIMENTO[m.tipo] ?? m.tipo}</td>
+                <td className="direita">{m.quantidade > 0 ? '+' : ''}{formatarQuantidade(m.quantidade)}</td>
+                <td className="direita">{formatarQuantidade(m.saldo)}</td>
+                <td>{[m.nNF ? `Nota nº ${m.nNF}` : null, m.observacao, m.usuario].filter(Boolean).join(' · ') || '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </Janela>
+  );
+}
 
 function FormularioProduto({ inicial, onSalvo, onFechar }) {
   const [p, setP] = React.useState(() => ({ ...produtoVazio(), ...inicial }));
@@ -26,6 +107,8 @@ function FormularioProduto({ inicial, onSalvo, onFechar }) {
     !/^\d{8}$/.test(digitos(p.NCM)) && 'NCM',
     !/^\d{4}$/.test(digitos(p.CFOP)) && 'CFOP',
     !p.uCom.trim() && 'unidade',
+    p.controlaEstoque && p.estoqueMinimo !== '' && !(num(p.estoqueMinimo) >= 0) && 'estoque mínimo',
+    p.controlaEstoque && novo && p.estoqueInicial !== '' && !(num(p.estoqueInicial) >= 0) && 'saldo inicial',
   ].filter(Boolean);
 
   async function salvar(e) {
@@ -61,6 +144,31 @@ function FormularioProduto({ inicial, onSalvo, onFechar }) {
         <datalist id="cfops-produto">{CFOPS.map(([c, d]) => <option key={c} value={c}>{d}</option>)}</datalist>
         <datalist id="unidades-produto">{UNIDADES.map((u) => <option key={u} value={u} />)}</datalist>
 
+        <div className="bloco-estoque">
+          <label className="marcador">
+            <input type="checkbox" checked={Boolean(p.controlaEstoque)} onChange={(e) => setP((x) => ({ ...x, controlaEstoque: e.target.checked }))} />
+            Controlar estoque deste produto
+          </label>
+          {p.controlaEstoque && (
+            <div className="grade">
+              {novo && (
+                <Campo rotulo="Saldo inicial" valor={p.estoqueInicial} onChange={s('estoqueInicial')} largura="m" inputMode="decimal" placeholder="0"
+                  dica={`Quanto você tem hoje, em ${p.uCom || 'unidades'}`} />
+              )}
+              {!novo && (
+                <div className="campo l-m">
+                  <span className="rotulo">Saldo atual</span>
+                  <div className="valor-fixo">{formatarQuantidade(p.saldo)} {p.uCom}</div>
+                  <span className="dica">Para mudar, use o botão Estoque na lista</span>
+                </div>
+              )}
+              <Campo rotulo="Estoque mínimo" valor={p.estoqueMinimo} onChange={s('estoqueMinimo')} largura="m" inputMode="decimal" placeholder="0"
+                dica="Abaixo disso, o produto aparece com alerta" />
+            </div>
+          )}
+          <span className="dica">Com o controle ligado, notas autorizadas baixam ou aumentam o saldo, e o cancelamento devolve.</span>
+        </div>
+
         <Tributos item={p} onChange={setP} />
 
         {erro && <div className="faixa-erro-local">{erro}</div>}
@@ -82,6 +190,8 @@ export function Produtos({ onAlterados }) {
   const [busca, setBusca] = React.useState('');
   const [editando, setEditando] = React.useState(null); // {} = novo
   const [aviso, setAviso] = React.useState(null);
+  const [estoqueDe, setEstoqueDe] = React.useState(null);
+  const [soBaixo, setSoBaixo] = React.useState(false);
 
   const carregar = React.useCallback(() => api.produtos().then(setLista).catch((e) => setErro(e.message)), []);
   React.useEffect(() => { carregar(); }, [carregar]);
@@ -93,7 +203,7 @@ export function Produtos({ onAlterados }) {
   }
 
   async function excluir(p) {
-    if (!window.confirm(`Excluir o produto ${p.xProd} (${p.cProd}) do cadastro? Notas já emitidas não mudam.`)) return;
+    if (!window.confirm(`Excluir o produto ${p.xProd} (${p.cProd}) do cadastro? O histórico de estoque dele também será apagado. Notas já emitidas não mudam.`)) return;
     try {
       await api.excluirProduto(p.id);
       await aposMudanca(`Produto ${p.xProd} excluído.`);
@@ -103,7 +213,8 @@ export function Produtos({ onAlterados }) {
   }
 
   const termo = busca.trim().toUpperCase();
-  const filtrados = (lista ?? []).filter((p) => !termo || p.xProd.includes(termo) || p.cProd.toUpperCase().includes(termo) || p.NCM.includes(digitos(termo) || '\u0000'));
+  const filtrados = (lista ?? []).filter((p) => !termo || p.xProd.includes(termo) || p.cProd.toUpperCase().includes(termo) || (digitos(termo) && p.NCM.includes(digitos(termo)))).filter((p) => !soBaixo || estoqueBaixo(p));
+  const quantosBaixos = (lista ?? []).filter(estoqueBaixo).length;
 
   return (
     <div className="pagina-notas">
@@ -113,6 +224,12 @@ export function Produtos({ onAlterados }) {
           <span>{lista ? `${lista.length} ${lista.length === 1 ? 'produto cadastrado' : 'produtos cadastrados'}` : 'Carregando…'}</span>
         </div>
         <div className="barra-botoes">
+          {quantosBaixos > 0 && (
+            <label className="marcador">
+              <input type="checkbox" checked={soBaixo} onChange={(e) => setSoBaixo(e.target.checked)} />
+              Só estoque baixo ({quantosBaixos})
+            </label>
+          )}
           {lista?.length > 0 && (
             <input type="search" className="busca" placeholder="Buscar por descrição, código ou NCM" value={busca}
               onChange={(e) => setBusca(e.target.value)} aria-label="Buscar produto" />
@@ -124,6 +241,7 @@ export function Produtos({ onAlterados }) {
       <div className="conteudo-lista">
         {aviso && <div className={`aviso-local ${aviso.ok ? 'ok' : 'falha'}`}>{aviso.texto}</div>}
         {erro && <div className="aviso-local falha">{erro}</div>}
+        {!lista && !erro && <EsqueletoTabela />}
         {lista && lista.length === 0 && (
           <div className="vazio">
             <div className="vazio-icone">📦</div>
@@ -134,7 +252,7 @@ export function Produtos({ onAlterados }) {
         {lista && lista.length > 0 && (
           <table className="tabela-notas">
             <thead>
-              <tr><th>Código</th><th>Descrição</th><th>NCM</th><th>CFOP</th><th>Un.</th><th className="direita">Preço</th><th>ICMS</th><th /></tr>
+              <tr><th>Código</th><th>Descrição</th><th>NCM</th><th>CFOP</th><th>Un.</th><th className="direita">Preço</th><th>ICMS</th><th>Estoque</th><th /></tr>
             </thead>
             <tbody>
               {filtrados.map((p) => (
@@ -146,19 +264,31 @@ export function Produtos({ onAlterados }) {
                   <td>{p.uCom}</td>
                   <td className="direita">{preco(p.vUnCom)}</td>
                   <td>{p.icms.CST} · {nomeCst(p.icms.CST)}{p.icms.CST === '00' ? ` ${p.icms.pICMS}%` : ''}</td>
-                  <td className="direita">
+                  <td>
+                    {p.controlaEstoque ? (
+                      <>
+                        <strong>{formatarQuantidade(p.saldo)} {p.uCom}</strong>
+                        {estoqueBaixo(p) && <span className="selo selo-alerta selo-baixo">⚠ Baixo</span>}
+                      </>
+                    ) : '—'}
+                  </td>
+                  <td className="direita acoes-linha">
+                    {p.controlaEstoque && (
+                      <button type="button" className="btn-texto" onClick={(e) => { e.stopPropagation(); setEstoqueDe(p); }} aria-label={`Estoque de ${p.xProd}`}>Estoque</button>
+                    )}
                     <button type="button" className="btn-perigo-texto" onClick={(e) => { e.stopPropagation(); excluir(p); }} aria-label={`Excluir ${p.xProd}`}>Excluir</button>
                   </td>
                 </tr>
               ))}
               {filtrados.length === 0 && (
-                <tr><td colSpan={8} className="vazio-pequeno">Nenhum produto encontrado para “{busca}”.</td></tr>
+                <tr><td colSpan={9} className="vazio-pequeno">Nenhum produto encontrado{busca ? ` para “${busca}”` : ''}.</td></tr>
               )}
             </tbody>
           </table>
         )}
       </div>
 
+      {estoqueDe && <JanelaEstoque produto={estoqueDe} onAlterado={() => { carregar(); onAlterados?.(); }} onFechar={() => setEstoqueDe(null)} />}
       {editando && (
         <FormularioProduto
           inicial={editando}

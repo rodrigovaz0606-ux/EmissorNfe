@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   notaVazia, itemVazio, paraPayload, totaisNota, pendencias, avisos, centavos, itemDoProduto, produtoDoItem,
-  aplicarTipoNota, cfopDoTipo, notaDoPayload, destDoCliente,
+  aplicarTipoNota, cfopDoTipo, notaDoPayload, destDoCliente, avisosEstoque, estoqueBaixo,
 } from './modelo.js';
 import { execFileSync } from 'node:child_process';
 
@@ -135,4 +135,23 @@ test('cliente do cadastro vira destinatário sem o id', () => {
   assert.equal(d.tipo, 'PJ');
   assert.equal(d.ender.xLgr, 'RUA');
   assert.equal(d.ender.UF, 'GO');
+});
+
+test('estoque: avisa quando a nota pede mais que o saldo, somando itens repetidos', () => {
+  const produtos = [
+    { cProd: 'SOJA01', uCom: 'SC', controlaEstoque: true, saldo: 100 },
+    { cProd: 'LIVRE', uCom: 'UN', controlaEstoque: false, saldo: 0 },
+  ];
+  const n = notaVazia();
+  const item = (cProd, qCom) => ({ ...itemVazio(), cProd, qCom });
+  n.itens = [item('soja01', '60'), item('LIVRE', '5')];
+  assert.deepEqual(avisosEstoque(n, produtos), []);
+  n.itens.push(item('SOJA01', '50,5'));
+  assert.deepEqual(avisosEstoque(n, produtos), ['SOJA01: a nota pede 110,5 SC, e o estoque tem 100']);
+  assert.deepEqual(avisosEstoque({ ...n, ide: { ...n.ide, tpNF: '0' } }, produtos), [], 'entrada não falta');
+  assert.deepEqual(avisosEstoque({ ...n, ide: { ...n.ide, finNFe: '2' } }, produtos), [], 'complementar não move');
+  assert.deepEqual(avisosEstoque(n, null), []);
+  assert.equal(estoqueBaixo({ controlaEstoque: true, saldo: 5, estoqueMinimo: '10,5' }), true);
+  assert.equal(estoqueBaixo({ controlaEstoque: true, saldo: 11, estoqueMinimo: '10,5' }), false);
+  assert.equal(estoqueBaixo({ controlaEstoque: false, saldo: -1, estoqueMinimo: '' }), false);
 });

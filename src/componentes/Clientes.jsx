@@ -1,5 +1,6 @@
 import React from 'react';
 import { api } from '../api.js';
+import { EsqueletoTabela } from './Movimento.jsx';
 import { Janela } from './Janela.jsx';
 import { CamposDestinatario, mascara } from './Destinatario.jsx';
 import { clienteVazio, destDoCliente, cpfValido, cnpjValido, digitos } from '../modelo.js';
@@ -100,6 +101,7 @@ export function Clientes({ onAlterados }) {
       <div className="conteudo-lista">
         {aviso && <div className={`aviso-local ${aviso.ok ? 'ok' : 'falha'}`}>{aviso.texto}</div>}
         {erro && <div className="aviso-local falha">{erro}</div>}
+        {!lista && !erro && <EsqueletoTabela />}
         {lista && lista.length === 0 && (
           <div className="vazio">
             <div className="vazio-icone">👥</div>

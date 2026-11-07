@@ -44,7 +44,7 @@ const CAMPOS_PRODUTO = ['cProd', 'xProd', 'NCM', 'CFOP', 'uCom', 'vUnCom'];
 
 export const produtoVazio = () => {
   const { cProd, xProd, NCM, CFOP, uCom, vUnCom, icms, pis, cofins } = itemVazio();
-  return { cProd, xProd, NCM, CFOP, uCom, vUnCom, icms, pis, cofins };
+  return { cProd, xProd, NCM, CFOP, uCom, vUnCom, icms, pis, cofins, controlaEstoque: false, estoqueMinimo: '', estoqueInicial: '' };
 };
 
 // Item da nota a partir de um produto cadastrado (quantidade 1; desconto e frete em branco).
@@ -60,6 +60,27 @@ export function produtoDoItem(it) {
   const p = { icms: { ...it.icms }, pis: { ...it.pis }, cofins: { ...it.cofins } };
   for (const c of CAMPOS_PRODUTO) p[c] = it[c];
   return p;
+}
+
+export const formatarQuantidade = (q) => (Number(q) || 0).toLocaleString('pt-BR', { maximumFractionDigits: 4 });
+export const estoqueBaixo = (p) => p.controlaEstoque && p.saldo < (num(p.estoqueMinimo) || 0);
+
+// Avisos de saldo: não impedem a emissão, porque o estoque pode estar desatualizado.
+export function avisosEstoque(nota, produtos) {
+  if (!produtos || nota.ide.tpNF !== '1' || !['1', '4'].includes(nota.ide.finNFe)) return [];
+  const pedido = new Map();
+  for (const it of nota.itens) {
+    const c = it.cProd.trim().toUpperCase();
+    if (c) pedido.set(c, (pedido.get(c) ?? 0) + (num(it.qCom) || 0));
+  }
+  const a = [];
+  for (const [codigo, quantidade] of pedido) {
+    const p = produtos.find((x) => x.cProd.toUpperCase() === codigo);
+    if (p?.controlaEstoque && quantidade > p.saldo) {
+      a.push(`${p.cProd}: a nota pede ${formatarQuantidade(quantidade)} ${p.uCom}, e o estoque tem ${formatarQuantidade(p.saldo)}`);
+    }
+  }
+  return a;
 }
 
 export const itemEstaVazio = (it) => !it.xProd.trim() && !it.cProd.trim() && !it.vUnCom;

@@ -1,5 +1,6 @@
 import React from 'react';
 import { api, arquivoEmBase64 } from '../api.js';
+import { EsqueletoTabela } from './Movimento.jsx';
 import { Janela } from './Janela.jsx';
 
 export const formatarDoc = (d = '') =>
@@ -125,6 +126,7 @@ export function Produtores({ usuario, produtorAtivo, onSelecionado, onAlterados,
       <div className="conteudo-lista">
         {aviso && <div className={`aviso-local ${aviso.ok ? 'ok' : 'falha'}`}>{aviso.texto}</div>}
         {erro && <div className="aviso-local falha">{erro}</div>}
+        {!lista && !erro && <EsqueletoTabela />}
         {lista && lista.length === 0 && (
           <div className="vazio">
             <div className="vazio-icone">🔐</div>

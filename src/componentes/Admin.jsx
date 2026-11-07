@@ -1,5 +1,6 @@
 import React from 'react';
 import { api } from '../api.js';
+import { EsqueletoTabela } from './Movimento.jsx';
 import { Janela } from './Janela.jsx';
 
 const dataHora = (s) => (s ? new Date(s.replace(' ', 'T')).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : 'nunca');
@@ -95,6 +96,7 @@ export function Admin({ usuario }) {
       <div className="conteudo-lista">
         {aviso && <div className="aviso-local ok">{aviso}</div>}
         {erro && <div className="aviso-local falha">{erro}</div>}
+        {!lista && !erro && <EsqueletoTabela />}
         {lista && (
           <table className="tabela-notas">
             <thead>

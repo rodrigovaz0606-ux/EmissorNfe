@@ -112,6 +112,8 @@ export const api = {
   criarProduto: (dados) => post('/api/produtos', dados),
   alterarProduto: (id, dados) => put(`/api/produtos/${id}`, dados),
   excluirProduto: (id) => apagar(`/api/produtos/${id}`),
+  estoqueProduto: (id) => chamar(`/api/produtos/${id}/estoque`),
+  movimentarEstoque: (id, dados) => post(`/api/produtos/${id}/estoque`, dados),
 
   clientes: () => chamar('/api/clientes'),
   criarCliente: (dados) => post('/api/clientes', dados),

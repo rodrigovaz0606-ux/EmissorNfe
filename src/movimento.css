@@ -1,0 +1,164 @@
+/* Movimento da interface: discreto e curto. Tudo aqui é desligado para quem pede
+   "reduzir movimento" no sistema (fim do arquivo). Só opacity e transform, que não pesam. */
+
+@keyframes entrar-pagina { from { opacity: 0; transform: translateY(8px); } }
+@keyframes entrar-baixo { from { opacity: 0; transform: translateY(10px); } }
+@keyframes entrar-janela { from { opacity: 0; transform: translateY(10px) scale(0.975); } }
+@keyframes entrar-menu { from { opacity: 0; transform: translateY(-6px) scale(0.97); } }
+@keyframes entrar-aviso { from { opacity: 0; transform: translateY(-6px); } }
+@keyframes surgir { from { opacity: 0; } }
+@keyframes estalar { 0% { transform: scale(0.4); opacity: 0; } 70% { transform: scale(1.15); } 100% { transform: scale(1); } }
+@keyframes tremer { 20%, 60% { transform: translateX(-4px); } 40%, 80% { transform: translateX(4px); } }
+@keyframes crescer-barra { from { transform: scaleY(0); } }
+@keyframes pulsar-ponto {
+  0% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.55); }
+  70%, 100% { box-shadow: 0 0 0 7px rgba(34, 197, 94, 0); }
+}
+@keyframes piscar { 50% { opacity: 0.35; } }
+@keyframes brilho-esqueleto { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@keyframes brilho-logo { from { transform: translateX(-120%) skewX(-20deg); } to { transform: translateX(220%) skewX(-20deg); } }
+@keyframes derivar-a { to { transform: translate(14vw, 10vh) scale(1.15); } }
+@keyframes derivar-b { to { transform: translate(-12vw, -12vh) scale(0.9); } }
+
+/* ---------- troca de tema: cores com transição só durante a troca ---------- */
+.tema-trocando, .tema-trocando *, .tema-trocando *::before, .tema-trocando *::after {
+  transition: background-color 0.28s ease, border-color 0.28s ease, color 0.28s ease, box-shadow 0.28s ease !important;
+}
+
+/* ---------- troca de aba ---------- */
+.transicao-pagina { animation: entrar-pagina 0.26s ease-out backwards; }
+
+/* ---------- abas: marcador deslizante ---------- */
+.abas { position: relative; }
+.abas button { position: relative; z-index: 1; transition: color 0.2s; }
+.abas button.ativa { background: transparent; }
+.abas-marcador {
+  position: absolute; left: 0; top: 4px; bottom: 4px; border-radius: 7px; background: white;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  transition: transform 0.28s cubic-bezier(0.3, 0.9, 0.3, 1), width 0.28s cubic-bezier(0.3, 0.9, 0.3, 1);
+}
+
+/* ---------- entrada em cascata ---------- */
+.formulario > *, .resumo > .cartao, .painel-indicadores > *, .painel-cartao, .cartoes-produtores > * {
+  animation: entrar-baixo 0.36s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+.formulario > :nth-child(2), .painel-indicadores > :nth-child(2), .cartoes-produtores > :nth-child(2) { animation-delay: 0.05s; }
+.formulario > :nth-child(3), .painel-indicadores > :nth-child(3), .cartoes-produtores > :nth-child(3) { animation-delay: 0.1s; }
+.formulario > :nth-child(4), .painel-indicadores > :nth-child(4), .cartoes-produtores > :nth-child(4) { animation-delay: 0.15s; }
+.formulario > :nth-child(5), .painel-indicadores > :nth-child(5), .cartoes-produtores > :nth-child(5) { animation-delay: 0.2s; }
+.resumo > .cartao:nth-child(2) { animation-delay: 0.08s; }
+
+.tabela-notas tbody tr { animation: entrar-baixo 0.28s ease-out backwards; transition: background-color 0.15s; }
+.tabela-notas tbody tr:nth-child(2) { animation-delay: 0.03s; }
+.tabela-notas tbody tr:nth-child(3) { animation-delay: 0.06s; }
+.tabela-notas tbody tr:nth-child(4) { animation-delay: 0.09s; }
+.tabela-notas tbody tr:nth-child(5) { animation-delay: 0.12s; }
+.tabela-notas tbody tr:nth-child(n + 6) { animation-delay: 0.15s; }
+
+/* ---------- janelas e menus ---------- */
+.janela-fundo { backdrop-filter: blur(2px); animation: surgir 0.16s ease-out; }
+.janela { animation: entrar-janela 0.24s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.menu-lista { transform-origin: top right; animation: entrar-menu 0.16s ease-out; }
+.menu-lista button { transition: background-color 0.12s; }
+
+/* ---------- avisos e resultado ---------- */
+.aviso-local, .faixa-erro-local, .avisos, .tudo-certo { animation: entrar-aviso 0.22s ease-out; }
+.form-acesso .faixa-erro-local { animation: tremer 0.32s ease-in-out; }
+.resultado { animation: entrar-baixo 0.32s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.passo { animation: entrar-baixo 0.28s ease-out backwards; }
+.passo:nth-child(2) { animation-delay: 0.1s; }
+.passo:nth-child(3) { animation-delay: 0.2s; }
+.passo.ok .passo-icone, .passo.falha .passo-icone { animation: estalar 0.34s ease-out backwards; animation-delay: inherit; }
+
+/* ---------- botões e cartões ---------- */
+.btn-primario, .btn-secundario, .btn-perigo, .btn-mini, .botao-tema, .produtor-atual {
+  transition: background-color 0.15s, border-color 0.15s, box-shadow 0.15s, transform 0.1s;
+}
+.btn-primario:hover:not(:disabled) { box-shadow: 0 4px 12px rgba(15, 118, 110, 0.3); }
+.btn-primario:active:not(:disabled), .btn-secundario:active:not(:disabled), .btn-perigo:active:not(:disabled) { transform: scale(0.98); }
+
+button.indicador, .cartao-produtor { transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s; }
+button.indicador:hover, .cartao-produtor:hover { transform: translateY(-2px); box-shadow: var(--sombra-alta); }
+button.indicador:active { transform: translateY(0); }
+
+.item { transition: border-color 0.2s, box-shadow 0.2s; }
+.item-cabecalho { transition: background-color 0.15s; }
+.item-corpo { animation: entrar-aviso 0.22s ease-out; }
+.seta { display: inline-block; transition: transform 0.22s ease; }
+.item.aberto .seta { transform: rotate(180deg); }
+
+/* ---------- gráfico ---------- */
+.barra { transform-origin: bottom; animation: crescer-barra 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) backwards; }
+.coluna-barra { transition: background-color 0.15s; }
+.dica-barra {
+  display: block; opacity: 0; transform: translate(-50%, 4px);
+  transition: opacity 0.14s, transform 0.14s;
+}
+.coluna-barra:hover .dica-barra, .coluna-barra:focus-visible .dica-barra { opacity: 1; transform: translate(-50%, 0); }
+.valor-barra { animation: surgir 0.3s 0.45s backwards; }
+
+/* ---------- status da SEFAZ ---------- */
+.status-sefaz.ok .ponto { animation: pulsar-ponto 2.4s ease-out infinite; }
+.status-sefaz:not(.ok):not(.falha) .ponto { animation: piscar 1s ease-in-out infinite; }
+
+/* ---------- botão de tema ---------- */
+.botao-tema {
+  position: relative; width: 34px; height: 34px; flex: none; display: grid; place-items: center; overflow: hidden;
+  border-radius: 50%; border: 1px solid rgba(255, 255, 255, 0.15); background: rgba(255, 255, 255, 0.05); color: #e6f2f1;
+}
+.botao-tema:hover { background: rgba(255, 255, 255, 0.14); }
+.botao-tema:focus-visible { outline: 2px solid #5eead4; outline-offset: 2px; }
+.botao-tema svg { position: absolute; transition: transform 0.35s cubic-bezier(0.3, 0.9, 0.3, 1), opacity 0.22s; }
+/* O ícone mostra o tema para o qual o botão leva. */
+.icone-sol { opacity: 0; transform: rotate(-90deg) scale(0.5); }
+:root[data-tema='escuro'] .icone-sol { opacity: 1; transform: none; }
+:root[data-tema='escuro'] .icone-lua { opacity: 0; transform: rotate(90deg) scale(0.5); }
+.botao-tema.sobre-claro { position: absolute; top: 16px; right: 16px; z-index: 2; }
+
+/* ---------- login ---------- */
+.tela-acesso { position: relative; overflow: hidden; }
+.tela-acesso::before, .tela-acesso::after {
+  content: ''; position: absolute; border-radius: 50%; filter: blur(70px); pointer-events: none;
+}
+.tela-acesso::before {
+  width: 46vw; height: 46vw; left: -8vw; top: -12vw; background: rgba(20, 184, 166, 0.28);
+  animation: derivar-a 22s ease-in-out infinite alternate;
+}
+.tela-acesso::after {
+  width: 38vw; height: 38vw; right: -8vw; bottom: -12vw; background: rgba(13, 148, 136, 0.22);
+  animation: derivar-b 26s ease-in-out infinite alternate;
+}
+.cartao-acesso { position: relative; z-index: 1; animation: entrar-janela 0.42s cubic-bezier(0.2, 0.8, 0.2, 1); }
+
+.logo { position: relative; overflow: hidden; }
+.logo::after {
+  content: ''; position: absolute; inset: 0 auto 0 0; width: 40%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
+  transform: translateX(-120%) skewX(-20deg); animation: brilho-logo 1.1s 0.3s ease-in-out;
+}
+
+/* ---------- carregamento ---------- */
+.esqueleto {
+  display: block; height: 12px; border-radius: 6px;
+  background: linear-gradient(90deg, var(--superficie-3) 25%, var(--superficie-2) 50%, var(--superficie-3) 75%);
+  background-size: 200% 100%; animation: brilho-esqueleto 1.4s linear infinite;
+}
+.esqueleto.grande { height: 26px; margin-top: 8px; }
+.esqueleto.bloco { height: 150px; width: 100%; margin-top: 16px; }
+/* Atraso: resposta rápida nem chega a mostrar o esqueleto. */
+.esqueleto-tabela, .esqueleto-cartao { animation: surgir 0.2s 0.15s backwards; }
+.esqueleto-tabela { background: var(--cartao); border: 1px solid var(--borda); border-radius: var(--raio); }
+.esqueleto-linha { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 16px 14px; border-bottom: 1px solid var(--borda); }
+.esqueleto-linha:last-child { border-bottom: 0; }
+
+/* ---------- quem pede menos movimento não recebe movimento ---------- */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-delay: 0s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+  button.indicador:hover, .cartao-produtor:hover { transform: none; }
+}

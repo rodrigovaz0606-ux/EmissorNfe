@@ -1,12 +1,13 @@
 import React from 'react';
 import { moeda, formatarChave } from '../modelo.js';
 import { api } from '../api.js';
+import { NumeroAnimado } from './Movimento.jsx';
 
 function Linha({ rotulo, valor, destaque, negativo }) {
   return (
     <div className={`linha ${destaque ? 'destaque' : ''}`}>
       <span>{rotulo}</span>
-      <span>{negativo && valor > 0 ? '− ' : ''}{moeda(valor)}</span>
+      <span>{negativo && valor > 0 ? '− ' : ''}<NumeroAnimado valor={valor} formatar={moeda} duracao={280} /></span>
     </div>
   );
 }
@@ -58,6 +59,9 @@ function Resultado({ r, onVerNotas, onNovaNota }) {
           />
         )}
       </ul>
+      {r.estoque?.movimentados > 0 && <p className="aviso-estoque">Estoque atualizado em {r.estoque.movimentados} {r.estoque.movimentados === 1 ? 'produto' : 'produtos'}.</p>}
+      {r.estoque?.ignorados?.map((t) => <p className="aviso-estoque alerta" key={t}>⚠ {t}</p>)}
+      {r.estoque?.erro && <p className="aviso-estoque alerta">⚠ {r.estoque.erro}</p>}
       {r.id && (
         <div className="downloads">
           <a className="btn-primario pequeno" href={api.urlDanfe(r.id)} target="_blank" rel="noreferrer">DANFE (PDF)</a>

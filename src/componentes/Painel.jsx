@@ -1,7 +1,8 @@
 import React from 'react';
 import { api } from '../api.js';
-import { moeda } from '../modelo.js';
+import { moeda, formatarQuantidade } from '../modelo.js';
 import { formatarDoc } from './Produtores.jsx';
+import { NumeroAnimado, EsqueletoPainel } from './Movimento.jsx';
 
 const NOMES_MES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
 const nomeMes = (aaaaMm) => {
@@ -42,7 +43,7 @@ function GraficoMeses({ meses }) {
           <div className="coluna-barra" key={m.mes} tabIndex={0} aria-label={`${nomeMes(m.mes)}: ${moeda(m.valor)}, ${m.notas} notas`}>
             <span className="dica-barra">{nomeMes(m.mes)} · {moeda(m.valor)} · {m.notas} {m.notas === 1 ? 'nota' : 'notas'}</span>
             {i === ultimoComValor && <span className="valor-barra">{moeda(m.valor)}</span>}
-            {m.valor > 0 && <div className="barra" style={{ height: `${Math.max((m.valor / maior) * 78, 2)}%` }} />}
+            {m.valor > 0 && <div className="barra" style={{ height: `${Math.max((m.valor / maior) * 78, 2)}%`, animationDelay: `${i * 60}ms` }} />}
           </div>
         ))}
       </div>
@@ -58,7 +59,7 @@ function GraficoMeses({ meses }) {
   );
 }
 
-export function Painel({ onVerNotas, onVerProdutores }) {
+export function Painel({ onVerNotas, onVerProdutores, onVerProdutos }) {
   const [p, setP] = React.useState(null);
   const [erro, setErro] = React.useState('');
   React.useEffect(() => { api.painel().then(setP).catch((e) => setErro(e.message)); }, []);
@@ -74,14 +75,15 @@ export function Painel({ onVerNotas, onVerProdutores }) {
       </div>
       <div className="conteudo-lista">
         {erro && <div className="aviso-local falha">{erro}</div>}
+        {!p && !erro && <EsqueletoPainel />}
         {p && (
           <>
             <div className="painel-indicadores">
-              <Indicador rotulo="Total autorizado no mês" valor={moeda(p.mes.valor_autorizado)} nota="Não soma notas canceladas" onClick={notasDoMes('autorizada')} />
-              <Indicador rotulo="Autorizadas" valor={p.mes.autorizadas} onClick={notasDoMes('autorizada')} />
-              <Indicador rotulo="Rejeitadas" valor={p.mes.rejeitadas} nota="Clique para ver os motivos" onClick={notasDoMes('rejeitada')} />
-              <Indicador rotulo="Pendentes" valor={p.mes.pendentes} nota="Sem resposta final da SEFAZ" onClick={notasDoMes('pendente')} />
-              <Indicador rotulo="Canceladas" valor={p.mes.canceladas} onClick={notasDoMes('cancelada')} />
+              <Indicador rotulo="Total autorizado no mês" valor={<NumeroAnimado valor={p.mes.valor_autorizado} formatar={moeda} />} nota="Não soma notas canceladas" onClick={notasDoMes('autorizada')} />
+              <Indicador rotulo="Autorizadas" valor={<NumeroAnimado valor={p.mes.autorizadas} />} onClick={notasDoMes('autorizada')} />
+              <Indicador rotulo="Rejeitadas" valor={<NumeroAnimado valor={p.mes.rejeitadas} />} nota="Clique para ver os motivos" onClick={notasDoMes('rejeitada')} />
+              <Indicador rotulo="Pendentes" valor={<NumeroAnimado valor={p.mes.pendentes} />} nota="Sem resposta final da SEFAZ" onClick={notasDoMes('pendente')} />
+              <Indicador rotulo="Canceladas" valor={<NumeroAnimado valor={p.mes.canceladas} />} onClick={notasDoMes('cancelada')} />
             </div>
 
             <section className="painel-cartao">
@@ -95,6 +97,23 @@ export function Painel({ onVerNotas, onVerProdutores }) {
                       <span className={`selo ${c.dias < 0 ? 'selo-falha' : 'selo-alerta'}`}>⚠ {c.dias < 0 ? 'Vencido' : c.dias === 0 ? 'Vence hoje' : `${c.dias} dias`}</span>
                       <span><strong>{c.titular}</strong> · {formatarDoc(c.documento)} · válido até {data(c.validoAte)}</span>
                       <button type="button" className="btn-texto" onClick={onVerProdutores}>Renovar</button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+
+            <section className="painel-cartao">
+              <h3>Estoque abaixo do mínimo</h3>
+              {p.estoqueBaixo.length === 0 ? (
+                <p className="vazio-pequeno">Nenhum produto abaixo do mínimo.</p>
+              ) : (
+                <ul className="lista-certificados">
+                  {p.estoqueBaixo.map((x) => (
+                    <li key={x.id}>
+                      <span className="selo selo-alerta">⚠ {formatarQuantidade(x.saldo)} {x.uCom}</span>
+                      <span><strong>{x.xProd}</strong> · {x.cProd} · mínimo {formatarQuantidade(x.minimo)}</span>
+                      <button type="button" className="btn-texto" onClick={onVerProdutos}>Ver produtos</button>
                     </li>
                   ))}
                 </ul>

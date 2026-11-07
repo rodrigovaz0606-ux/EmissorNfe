@@ -720,3 +720,147 @@ async fn devolucao_entrada_e_remessa_passam_no_schema() {
     re["pag"] = json!([{ "tPag": "90" }]);
     assert_eq!(api.post("/nfe/validar", re).await.json()["xsd"]["valido"], json!(true));
 }
+
+// ---------- estoque ----------
+
+fn produto_com_estoque(codigo: &str, inicial: &str, minimo: &str) -> Value {
+    json!({ "cProd": codigo, "xProd": "PRODUTO", "NCM": "12019000", "CFOP": "5101", "uCom": "SC",
+            "controlaEstoque": true, "estoqueInicial": inicial, "estoqueMinimo": minimo })
+}
+
+#[tokio::test]
+async fn estoque_movimentos_manuais() {
+    let api = Api::nova().await;
+    let r = api.post("/produtos", produto_com_estoque("SOJA01", "100", "30")).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.texto());
+    let id = r.json()["id"].as_i64().unwrap();
+    assert!(r.json().get("estoqueInicial").is_none(), "o saldo inicial vira movimento, não fica no cadastro");
+    let url = format!("/produtos/{id}/estoque");
+    let saldo = async || api.get("/produtos").await.json()[0]["saldo"].as_f64().unwrap();
+    assert_eq!(saldo().await, 100.0);
+
+    // entrada com decimal, saída e ajuste
+    assert_eq!(api.post(&url, json!({ "tipo": "entrada", "quantidade": "10,5", "observacao": "colheita" })).await.status, StatusCode::CREATED);
+    assert_eq!(saldo().await, 110.5);
+    api.post(&url, json!({ "tipo": "saida", "quantidade": "0,5" })).await;
+    assert_eq!(saldo().await, 110.0);
+    assert_eq!(api.post(&url, json!({ "tipo": "ajuste", "quantidade": "95" })).await.json()["saldo"], json!(95.0));
+
+    // recusas: saída maior que o saldo, zero, negativo, tipo errado, ajuste igual
+    let erro = async |d: Value| api.post(&url, d).await.json()["erro"].as_str().unwrap_or("").to_string();
+    assert!(erro(json!({ "tipo": "saida", "quantidade": "96" })).await.contains("maior que o saldo"));
+    assert!(erro(json!({ "tipo": "entrada", "quantidade": "0" })).await.contains("maior que zero"));
+    assert!(erro(json!({ "tipo": "entrada", "quantidade": "-1" })).await.contains("inválida"));
+    assert!(erro(json!({ "tipo": "x", "quantidade": "1" })).await.contains("inválido"));
+    assert!(erro(json!({ "tipo": "ajuste", "quantidade": "95" })).await.contains("nada a ajustar"));
+    assert_eq!(saldo().await, 95.0);
+
+    // histórico: mais recente primeiro, com saldo acumulado e usuário
+    let h = api.get(&url).await.json();
+    assert_eq!(h["saldo"], json!(95.0));
+    let m = h["movimentos"].as_array().unwrap();
+    assert_eq!(m.len(), 4);
+    assert_eq!((m[0]["tipo"].clone(), m[0]["quantidade"].clone(), m[0]["saldo"].clone()), (json!("ajuste"), json!(-15.0), json!(95.0)));
+    assert_eq!(m[0]["usuario"], json!("Administrador"));
+    assert_eq!(m[3]["observacao"], json!("Saldo inicial"));
+
+    // alterar o cadastro não mexe no saldo, e saldo inicial enviado na alteração é ignorado
+    let r = api.chamar("PUT", &format!("/produtos/{id}"), Some(produto_com_estoque("SOJA01", "999", "30"))).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.texto());
+    assert_eq!(saldo().await, 95.0);
+
+    // abaixo do mínimo aparece no painel
+    assert_eq!(api.get("/painel").await.json()["estoqueBaixo"], json!([]));
+    api.post(&url, json!({ "tipo": "ajuste", "quantidade": "29" })).await;
+    let b = api.get("/painel").await.json();
+    assert_eq!(b["estoqueBaixo"][0]["cProd"], json!("SOJA01"));
+    assert_eq!(b["estoqueBaixo"][0]["saldo"], json!(29.0));
+
+    // produto sem controle não aceita movimento
+    let sem = api.post("/produtos", json!({ "cProd": "X1", "xProd": "X", "NCM": "12019000", "CFOP": "5101", "uCom": "UN" })).await.json();
+    assert_eq!(sem["controlaEstoque"], json!(false));
+    let r = api.post(&format!("/produtos/{}/estoque", sem["id"]), json!({ "tipo": "entrada", "quantidade": "1" })).await;
+    assert!(r.json()["erro"].as_str().unwrap().contains("não está com o controle"));
+
+    // outro produtor não vê nem movimenta; excluir o produto apaga o histórico
+    api.post("/produtores", envio_pfx(PFX_CPF, "teste")).await;
+    assert_eq!(api.get(&url).await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(api.post(&url, json!({ "tipo": "entrada", "quantidade": "1" })).await.status, StatusCode::BAD_REQUEST);
+}
+
+/// Nota de teste com um único item do produto informado.
+fn nota_do_produto(n_nf: i64, codigo: &str, quantidade: Value, unidade: &str) -> Value {
+    let mut d = nota(n_nf);
+    d["itens"][0]["cProd"] = json!(codigo);
+    d["itens"][0]["qCom"] = quantidade;
+    d["itens"][0]["uCom"] = json!(unidade);
+    d
+}
+
+#[tokio::test]
+async fn estoque_acompanha_as_notas() {
+    let api = Api::nova().await;
+    api.post("/produtos", produto_com_estoque("SOJA01", "100", "")).await;
+    let saldo = async || api.get("/produtos").await.json()[0]["saldo"].as_f64().unwrap();
+
+    // validar e rejeitada não mexem; autorizada baixa
+    api.post("/nfe/validar", nota_do_produto(1, "SOJA01", json!(10), "SC")).await;
+    api.rejeitar.store(true, Ordering::SeqCst);
+    let r = api.post("/nfe/emitir", nota_do_produto(1, "SOJA01", json!(10), "SC")).await.json();
+    assert_eq!(r["status"], json!("rejeitada"));
+    assert!(r.get("estoque").is_none());
+    assert_eq!(saldo().await, 100.0);
+
+    let r = api.post("/nfe/emitir", nota_do_produto(1, "soja01", json!(10.5), "sc")).await.json();
+    assert_eq!(r["status"], json!("autorizada"), "{r}");
+    assert_eq!(r["estoque"]["movimentados"], json!(1));
+    assert_eq!(saldo().await, 89.5);
+
+    // cancelar devolve; o histórico aponta a nota
+    let id = r["id"].as_i64().unwrap();
+    let c = api.post(&format!("/notas/{id}/cancelar"), json!({ "xJust": "Cancelamento de teste automatizado" })).await.json();
+    assert_eq!(c["estoque"]["movimentados"], json!(1), "{c}");
+    assert_eq!(saldo().await, 100.0);
+    let produto = api.get("/produtos").await.json()[0]["id"].as_i64().unwrap();
+    let h = api.get(&format!("/produtos/{produto}/estoque")).await.json();
+    assert_eq!(h["movimentos"][0]["tipo"], json!("estorno"));
+    assert_eq!(h["movimentos"][1]["tipo"], json!("nota"));
+    assert_eq!(h["movimentos"][1]["nNF"], json!(1));
+
+    // nota maior que o saldo é emitida do mesmo jeito (o saldo pode estar desatualizado) e fica negativo
+    let r = api.post("/nfe/emitir", nota_do_produto(2, "SOJA01", json!(150), "SC")).await.json();
+    assert_eq!(r["status"], json!("autorizada"), "{r}");
+    assert_eq!(saldo().await, -50.0);
+
+    // nota de entrada aumenta
+    let mut e = nota_do_produto(3, "SOJA01", json!(60), "SC");
+    e["ide"]["tpNF"] = json!(0);
+    e["itens"][0]["CFOP"] = json!("1101");
+    assert_eq!(api.post("/nfe/emitir", e).await.json()["status"], json!("autorizada"));
+    assert_eq!(saldo().await, 10.0);
+
+    // outra unidade não soma e avisa
+    let r = api.post("/nfe/emitir", nota_do_produto(4, "SOJA01", json!(5), "KG")).await.json();
+    assert_eq!(r["estoque"]["movimentados"], json!(0));
+    assert!(r["estoque"]["ignorados"][0].as_str().unwrap().contains("KG"));
+    assert_eq!(saldo().await, 10.0);
+
+    // complementar não move mercadoria; devolução move
+    let chave = r["chave"].as_str().unwrap().to_string();
+    let mut comp = nota_do_produto(5, "SOJA01", json!(5), "SC");
+    comp["ide"]["finNFe"] = json!(2);
+    comp["ide"]["refNFe"] = json!([chave]);
+    assert_eq!(api.post("/nfe/emitir", comp).await.json()["status"], json!("autorizada"));
+    assert_eq!(saldo().await, 10.0);
+    let mut dev = nota_do_produto(6, "SOJA01", json!(4), "SC");
+    dev["ide"]["finNFe"] = json!(4);
+    dev["ide"]["refNFe"] = json!([chave]);
+    dev["pag"] = json!([{ "tPag": "90" }]);
+    assert_eq!(api.post("/nfe/emitir", dev).await.json()["status"], json!("autorizada"));
+    assert_eq!(saldo().await, 6.0);
+
+    // produto sem controle ou sem cadastro não atrapalha a emissão
+    let r = api.post("/nfe/emitir", nota_do_produto(7, "NAOEXISTE", json!(1), "SC")).await.json();
+    assert_eq!(r["status"], json!("autorizada"), "{r}");
+    assert_eq!(r["estoque"]["movimentados"], json!(0));
+}

@@ -4,6 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Emissor NF-e</title>
+    <script>
+      // Antes do primeiro desenho, para o tema escuro não piscar em branco.
+      (function () {
+        var salvo = null;
+        try { salvo = localStorage.getItem('emissor.tema'); } catch (e) { /* sem armazenamento */ }
+        var escuro = salvo ? salvo === 'escuro' : window.matchMedia('(prefers-color-scheme: dark)').matches;
+        document.documentElement.dataset.tema = escuro ? 'escuro' : 'claro';
+      })();
+    </script>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%230f766e'/><text x='16' y='21' font-size='13' font-family='sans-serif' font-weight='700' fill='white' text-anchor='middle'>NF</text></svg>" />
   </head>
   <body>

@@ -146,6 +146,26 @@ CREATE TABLE clientes (
 );
 ";
 
+/// Migração 3: movimentos de estoque. Excluir um produto apaga o histórico dele.
+const MIGRACAO_3: &str = "
+CREATE TABLE estoque_movimentos (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  produtor_id   INTEGER NOT NULL REFERENCES produtores(id),
+  produto_id    INTEGER NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+  tipo          TEXT NOT NULL,          -- entrada | saida | ajuste | nota | estorno
+  quantidade    INTEGER NOT NULL,       -- com sinal, em décimos de milésimo (ver ESCALA_ESTOQUE)
+  nota_id       INTEGER REFERENCES notas(id),
+  usuario_id    INTEGER REFERENCES usuarios(id),
+  observacao    TEXT,
+  criado_em     TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+CREATE INDEX ix_estoque_produto ON estoque_movimentos (produto_id, id);
+CREATE INDEX ix_estoque_nota ON estoque_movimentos (nota_id);
+";
+
+/// Quantidades de estoque são guardadas como inteiros: qCom tem até 4 casas decimais.
+pub const ESCALA_ESTOQUE: f64 = 10_000.0;
+
 /// Números "consumidos": notas que a SEFAZ registrou (autorizadas, canceladas, denegadas)
 /// e faixas inutilizadas. Número de nota rejeitada pode ser reutilizado.
 const STATUS_QUE_CONSOMEM: &str = "('autorizada', 'cancelada', 'denegada')";
@@ -263,6 +283,84 @@ pub struct CertificadoProdutor<'a> {
     pub pfx_cifrado: &'a [u8],
     pub senha_cifrada: &'a [u8],
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TipoMovimento {
+    Entrada,
+    Saida,
+    Ajuste,
+    /// Baixa ou entrada automática de uma nota autorizada.
+    Nota,
+    /// Devolução ao estoque quando a nota é cancelada.
+    Estorno,
+}
+
+impl TipoMovimento {
+    fn nome(self) -> &'static str {
+        match self {
+            TipoMovimento::Entrada => "entrada",
+            TipoMovimento::Saida => "saida",
+            TipoMovimento::Ajuste => "ajuste",
+            TipoMovimento::Nota => "nota",
+            TipoMovimento::Estorno => "estorno",
+        }
+    }
+
+    fn de_nome(nome: &str) -> Option<Self> {
+        [Self::Entrada, Self::Saida, Self::Ajuste, Self::Nota, Self::Estorno].into_iter().find(|t| t.nome() == nome)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct NovoMovimento {
+    pub produtor_id: i64,
+    pub produto_id: i64,
+    pub tipo: TipoMovimento,
+    /// Com sinal, em décimos de milésimo.
+    pub quantidade: i64,
+    pub nota_id: Option<i64>,
+    pub usuario_id: Option<i64>,
+    pub observacao: Option<String>,
+}
+
+/// Movimento já gravado de uma nota.
+#[derive(Debug, Clone)]
+pub struct MovimentoDaNota {
+    pub produto_id: i64,
+    pub tipo: TipoMovimento,
+    pub quantidade: i64,
+}
+
+/// Produto do ponto de vista do estoque.
+#[derive(Debug, Clone)]
+pub struct ProdutoEstoque {
+    pub id: i64,
+    pub c_prod: String,
+    pub x_prod: String,
+    pub u_com: String,
+    pub controla: bool,
+    pub minimo: f64,
+    /// Em décimos de milésimo.
+    pub saldo: i64,
+}
+
+fn produto_estoque_de(r: &Row) -> rusqlite::Result<ProdutoEstoque> {
+    let dados: String = r.get(3)?;
+    let d: Value = serde_json::from_str(&dados).unwrap_or(Value::Null);
+    Ok(ProdutoEstoque {
+        id: r.get(0)?,
+        c_prod: r.get(1)?,
+        x_prod: r.get(2)?,
+        u_com: d["uCom"].as_str().unwrap_or("").to_string(),
+        controla: d["controlaEstoque"].as_bool().unwrap_or(false),
+        minimo: d["estoqueMinimo"].as_str().and_then(crate::produtos::ler_numero).unwrap_or(0.0),
+        saldo: r.get(4)?,
+    })
+}
+
+const SQL_PRODUTO_ESTOQUE: &str = "SELECT p.id, p.cProd, p.xProd, p.dados_json,
+       COALESCE((SELECT SUM(m.quantidade) FROM estoque_movimentos m WHERE m.produto_id = p.id), 0)
+FROM produtos p";
 
 /// Filtros da lista de notas (tudo opcional).
 #[derive(Debug, Default, Clone)]
@@ -397,6 +495,9 @@ impl Repositorio {
         }
         if versao < 2 {
             db.execute_batch(&format!("BEGIN; {MIGRACAO_2} PRAGMA user_version = 2; COMMIT;"))?;
+        }
+        if versao < 3 {
+            db.execute_batch(&format!("BEGIN; {MIGRACAO_3} PRAGMA user_version = 3; COMMIT;"))?;
         }
         Ok(Repositorio { db })
     }
@@ -623,13 +724,18 @@ impl Repositorio {
 
     /// Produtos em ordem de descrição; cada um é o JSON do cadastro com o `id`.
     pub fn listar_produtos(&self, produtor: i64) -> Result<Vec<Value>> {
-        let mut st = self.db.prepare("SELECT id, dados_json FROM produtos WHERE produtor_id = ? ORDER BY xProd COLLATE NOCASE, cProd")?;
-        let linhas = st.query_map([produtor], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+        let mut st = self.db.prepare(
+            "SELECT p.id, p.dados_json,
+                    COALESCE((SELECT SUM(m.quantidade) FROM estoque_movimentos m WHERE m.produto_id = p.id), 0)
+             FROM produtos p WHERE p.produtor_id = ? ORDER BY p.xProd COLLATE NOCASE, p.cProd",
+        )?;
+        let linhas = st.query_map([produtor], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?)))?;
         let mut v = Vec::new();
         for l in linhas {
-            let (id, dados) = l?;
+            let (id, dados, saldo) = l?;
             let mut m = serde_json::from_str::<Map<String, Value>>(&dados).unwrap_or_default();
             m.insert("id".into(), Value::from(id));
+            m.insert("saldo".into(), Value::from(saldo as f64 / ESCALA_ESTOQUE));
             v.push(Value::Object(m));
         }
         Ok(v)
@@ -664,6 +770,74 @@ impl Repositorio {
     /// Devolve false se o produto não existe.
     pub fn excluir_produto(&self, produtor: i64, id: i64) -> Result<bool> {
         Ok(self.db.execute("DELETE FROM produtos WHERE id = ? AND produtor_id = ?", [id, produtor])? > 0)
+    }
+
+    // ---------- estoque ----------
+
+    pub fn produto_estoque(&self, produtor: i64, id: i64) -> Result<Option<ProdutoEstoque>> {
+        Ok(self
+            .db
+            .query_row(&format!("{SQL_PRODUTO_ESTOQUE} WHERE p.produtor_id = ? AND p.id = ?"), [produtor, id], produto_estoque_de)
+            .optional()?)
+    }
+
+    pub fn produto_estoque_por_codigo(&self, produtor: i64, c_prod: &str) -> Result<Option<ProdutoEstoque>> {
+        Ok(self
+            .db
+            .query_row(&format!("{SQL_PRODUTO_ESTOQUE} WHERE p.produtor_id = ? AND p.cProd = ?"), params![produtor, c_prod], produto_estoque_de)
+            .optional()?)
+    }
+
+    /// Produtos com controle ligado e saldo abaixo do mínimo (ou negativo).
+    pub fn produtos_com_estoque_baixo(&self, produtor: i64) -> Result<Vec<ProdutoEstoque>> {
+        let mut st = self.db.prepare(&format!("{SQL_PRODUTO_ESTOQUE} WHERE p.produtor_id = ? ORDER BY p.xProd COLLATE NOCASE"))?;
+        let todos = st.query_map([produtor], produto_estoque_de)?.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(todos.into_iter().filter(|p| p.controla && (p.saldo as f64) < p.minimo * ESCALA_ESTOQUE).collect())
+    }
+
+    /// Grava todos os movimentos ou nenhum.
+    pub fn registrar_movimentos(&self, movimentos: &[NovoMovimento]) -> Result<()> {
+        let tx = self.db.unchecked_transaction()?;
+        for m in movimentos {
+            tx.execute(
+                "INSERT INTO estoque_movimentos (produtor_id, produto_id, tipo, quantidade, nota_id, usuario_id, observacao)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                params![m.produtor_id, m.produto_id, m.tipo.nome(), m.quantidade, m.nota_id, m.usuario_id, m.observacao],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn movimentos_da_nota(&self, produtor: i64, nota_id: i64) -> Result<Vec<MovimentoDaNota>> {
+        let mut st = self.db.prepare("SELECT produto_id, tipo, quantidade FROM estoque_movimentos WHERE produtor_id = ? AND nota_id = ? ORDER BY id")?;
+        let v = st
+            .query_map([produtor, nota_id], |r| {
+                let tipo: String = r.get(1)?;
+                Ok(MovimentoDaNota { produto_id: r.get(0)?, tipo: TipoMovimento::de_nome(&tipo).unwrap_or(TipoMovimento::Ajuste), quantidade: r.get(2)? })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(v)
+    }
+
+    /// Histórico mais recente de um produto, com o saldo depois de cada movimento.
+    pub fn movimentos_do_produto(&self, produtor: i64, produto: i64, limite: i64) -> Result<Vec<Value>> {
+        let mut v = self.linhas(
+            "SELECT m.id, m.tipo, m.quantidade, m.observacao, m.criado_em, n.nNF, n.serie, u.nome AS usuario,
+                    (SELECT SUM(a.quantidade) FROM estoque_movimentos a WHERE a.produto_id = m.produto_id AND a.id <= m.id) AS saldo
+             FROM estoque_movimentos m
+             LEFT JOIN notas n ON n.id = m.nota_id
+             LEFT JOIN usuarios u ON u.id = m.usuario_id
+             WHERE m.produtor_id = ? AND m.produto_id = ? ORDER BY m.id DESC LIMIT ?",
+            params![produtor, produto, limite],
+        )?;
+        for m in &mut v {
+            for campo in ["quantidade", "saldo"] {
+                let q = m[campo].as_i64().unwrap_or(0) as f64 / ESCALA_ESTOQUE;
+                m[campo] = Value::from(q);
+            }
+        }
+        Ok(v)
     }
 
     // ---------- clientes ----------

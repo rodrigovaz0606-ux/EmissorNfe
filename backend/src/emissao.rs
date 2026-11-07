@@ -203,6 +203,13 @@ pub fn emitir_nfe(dados: &Value, ctx: &Contexto, ativo: &Ativo) -> Result<Value>
         },
     )?;
 
+    // A nota já está autorizada: falha no estoque vira aviso, nunca erro da emissão.
+    if status == "autorizada" {
+        resposta["estoque"] = crate::estoque::movimentar_por_nota(ctx, ativo, id, dados).unwrap_or_else(|e| {
+            eprintln!("[estoque] nota {id}: {e:#}");
+            json!({ "erro": "A nota foi autorizada, mas o estoque não foi atualizado. Confira e ajuste o saldo." })
+        });
+    }
     resposta["id"] = json!(id);
     resposta["status"] = json!(status);
     resposta["enviada"] = json!(true);
@@ -262,9 +269,13 @@ pub fn cancelar_nota(id: i64, x_just: Option<String>, ctx: &Contexto, ativo: &At
     }
     let texto = x_just.clone().unwrap_or_default();
     let dados = DadosEvento { n_prot: nota.n_prot.clone(), x_just, ..Default::default() };
-    let r = registrar_evento(TipoEvento::Cancelamento, &nota, dados, texto, ctx, ativo)?;
+    let mut r = registrar_evento(TipoEvento::Cancelamento, &nota, dados, texto, ctx, ativo)?;
     if r["registrado"] == json!(true) {
         ctx.repo().marcar_cancelada(nota.id)?;
+        r["estoque"] = crate::estoque::estornar_nota(ctx, ativo, nota.id).unwrap_or_else(|e| {
+            eprintln!("[estoque] estorno da nota {}: {e:#}", nota.id);
+            json!({ "erro": "A nota foi cancelada, mas o estoque não foi devolvido. Confira e ajuste o saldo." })
+        });
     }
     Ok(r)
 }

@@ -61,7 +61,13 @@ pub fn painel(ctx: &Contexto, s: &SessaoAtual, ativo: &Ativo) -> Result<Value> {
         }
     }
     certificados.sort_by_key(|c| c["dias"].as_i64());
-    Ok(json!({ "mes": mes, "meses": meses, "certificados": certificados }))
+    let estoque_baixo: Vec<Value> = ctx
+        .repo()
+        .produtos_com_estoque_baixo(ativo.id)?
+        .into_iter()
+        .map(|p| json!({ "id": p.id, "cProd": p.c_prod, "xProd": p.x_prod, "uCom": p.u_com, "saldo": p.saldo as f64 / crate::db::ESCALA_ESTOQUE, "minimo": p.minimo }))
+        .collect();
+    Ok(json!({ "mes": mes, "meses": meses, "certificados": certificados, "estoqueBaixo": estoque_baixo }))
 }
 
 // ---------- exportação ----------

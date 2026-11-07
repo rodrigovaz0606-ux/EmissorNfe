@@ -1,5 +1,6 @@
 import React from 'react';
 import { api } from '../api.js';
+import { BotaoTema } from './Movimento.jsx';
 
 function CampoAcesso({ rotulo, dica, ...props }) {
   const id = React.useId();
@@ -15,6 +16,7 @@ function CampoAcesso({ rotulo, dica, ...props }) {
 function Moldura({ titulo, subtitulo, children }) {
   return (
     <div className="tela-acesso">
+      <BotaoTema claro />
       <div className="cartao-acesso">
         <div className="marca marca-acesso">
           <div className="logo">NF</div>

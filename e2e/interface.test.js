@@ -58,6 +58,47 @@ async function esperarServidor() {
   throw new Error('Servidor não subiu');
 }
 
+// Auditoria de cores da tela atual: nada de fundo branco esquecido no tema escuro, e texto legível.
+// Contraste WCAG AA: 4,5:1 (ignora campos desabilitados, placeholders e faixas com gradiente).
+async function auditarCores(tema) {
+  await new Promise((r) => setTimeout(r, 900)); // espera as animações de entrada
+  return pagina.evaluate((temaAtual) => {
+    const rgba = (c) => { const m = c.match(/[\d.]+/g).map(Number); return { r: m[0], g: m[1], b: m[2], a: m[3] ?? 1 }; };
+    const canal = (v) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; };
+    const luz = (c) => 0.2126 * canal(c.r) + 0.7152 * canal(c.g) + 0.0722 * canal(c.b);
+    const contraste = (a, b) => { const [x, y] = [luz(a), luz(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+    const sobre = (f, t) => ({ r: f.r * f.a + t.r * (1 - f.a), g: f.g * f.a + t.g * (1 - f.a), b: f.b * f.a + t.b * (1 - f.a), a: 1 });
+    const descreve = (e) => `${e.tagName.toLowerCase()}.${String(e.className).split(' ').join('.')} "${(e.textContent || '').trim().slice(0, 30)}"`;
+    const problemas = [];
+    const raiz = document.querySelector('.janela') || document.body;
+    const visivel = (e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(e).visibility !== 'hidden'; };
+    const fundoDe = (e) => {
+      const camadas = [];
+      for (let a = e; a; a = a.parentElement) {
+        const s = getComputedStyle(a);
+        if (s.backgroundImage !== 'none') return null; // gradiente: não dá para calcular
+        const f = rgba(s.backgroundColor);
+        if (f.a > 0) { camadas.push(f); if (f.a === 1) break; }
+      }
+      return camadas.reduceRight((t, f) => sobre(f, t), { r: 255, g: 255, b: 255, a: 1 });
+    };
+    for (const e of raiz.querySelectorAll('*')) {
+      // A aba ativa fica sobre o marcador branco, que é um elemento irmão (#115e59 sobre branco dá 7:1).
+      if (!visivel(e) || e.closest('svg') || e.classList.contains('abas-marcador') || e.matches('.abas button.ativa')) continue;
+      const s = getComputedStyle(e);
+      if (temaAtual === 'escuro' && s.backgroundColor === 'rgb(255, 255, 255)') problemas.push(`fundo branco: ${descreve(e)}`);
+      const temTexto = [...e.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
+      const inativo = e.closest(':disabled') || e.tagName === 'OPTION' || Number(s.opacity) < 1;
+      if (!temTexto || inativo) continue;
+      const fundo = fundoDe(e);
+      if (!fundo) continue;
+      const c = contraste(sobre(rgba(s.color), fundo), fundo);
+      if (c < 4.5) problemas.push(`contraste ${c.toFixed(2)}: ${descreve(e)} (${s.color} sobre ${JSON.stringify(fundo)})`);
+    }
+    return [...new Set(problemas)];
+  }, tema);
+}
+
 const print = async (nome) => PRINTS && pagina.screenshot({ path: path.join(PRINTS, `${nome}.png`), fullPage: true });
 
 describe('interface (Edge + SEFAZ simulada)', () => {
@@ -443,6 +484,7 @@ describe('interface (Edge + SEFAZ simulada)', () => {
     await pagina.getByRole('tab', { name: 'Painel' }).click();
     const indicadores = pagina.locator('.painel-indicadores');
     await indicadores.waitFor();
+    await indicadores.getByText(/66\.250,00/).waitFor(); // os números contam até o valor final
     const texto = await indicadores.innerText();
     assert.match(texto, /Total autorizado no mês\s+R\$\s*66\.250,00/);
     assert.match(texto, /Canceladas\s+1/);
@@ -456,6 +498,78 @@ describe('interface (Edge + SEFAZ simulada)', () => {
     assert.equal(await pagina.getByLabel('Situação').inputValue(), 'cancelada');
     await pagina.locator('.tabela-notas tbody tr').first().getByText('Cancelada').waitFor();
     assert.equal(await pagina.locator('.tabela-notas tbody tr').count(), 1);
+  });
+
+  test('estoque: cadastro, movimentos, baixa pela nota e devolução no cancelamento', async () => {
+    await pagina.getByRole('tab', { name: 'Produtos' }).click();
+    await pagina.getByRole('button', { name: '+ Novo produto' }).click();
+    const form = pagina.getByRole('dialog');
+    await form.getByLabel('Código').fill('MILHO01');
+    await form.getByLabel('Descrição').fill('MILHO');
+    await form.getByLabel('NCM').fill('10059010');
+    await form.getByLabel('Unidade').fill('SC');
+    await form.getByLabel('Preço unitário').fill('58,40');
+    await form.getByLabel('Controlar estoque deste produto').check();
+    await form.getByLabel('Saldo inicial').fill('100');
+    await form.getByLabel('Estoque mínimo').fill('30');
+    await print('14-produto-estoque');
+    await form.getByRole('button', { name: 'Cadastrar produto' }).click();
+    await pagina.getByText('Produto MILHO cadastrado.').waitFor();
+    const linha = pagina.locator('.tabela-notas tbody tr', { hasText: 'MILHO01' });
+    assert.match(await linha.innerText(), /100 SC/);
+
+    // movimentos manuais; saída maior que o saldo é recusada
+    await linha.getByRole('button', { name: 'Estoque de MILHO' }).click();
+    const janela = pagina.getByRole('dialog');
+    await janela.getByText('100 SC').waitFor();
+    await janela.getByLabel('Quantidade').fill('10');
+    await janela.getByLabel('Observação').fill('colheita');
+    await janela.getByRole('button', { name: 'Registrar movimento' }).click();
+    await janela.getByText('110 SC').waitFor();
+    await janela.getByLabel('Movimento').selectOption({ label: 'Saída' });
+    await janela.getByLabel('Quantidade').fill('500');
+    await janela.getByRole('button', { name: 'Registrar movimento' }).click();
+    await janela.getByText(/Saída maior que o saldo/).waitFor();
+    await janela.getByLabel('Movimento').selectOption({ label: 'Ajuste de contagem' });
+    await janela.getByLabel('Saldo contado').fill('20');
+    await janela.getByRole('button', { name: 'Registrar movimento' }).click();
+    await janela.getByText('Abaixo do mínimo de 30').waitFor();
+    assert.equal(await janela.locator('.tabela-movimentos tbody tr').count(), 3);
+    await print('15-estoque');
+    await pagina.keyboard.press('Escape');
+    assert.match(await linha.innerText(), /20 SC[\s\S]*Baixo/);
+    await print('16-lista-estoque');
+
+    // nota: o saldo aparece na escolha, falta de saldo só avisa e a autorização baixa
+    await pagina.getByRole('tab', { name: 'Emitir nota' }).click();
+    await pagina.getByRole('button', { name: 'Nova nota' }).click();
+    const itens = pagina.locator('#itens');
+    await itens.getByLabel('Produto cadastrado').selectOption({ label: 'MILHO (MILHO01) · 20 SC' });
+    await itens.getByLabel('Quantidade').fill('25');
+    await pagina.getByText('MILHO01: a nota pede 25 SC, e o estoque tem 20').waitFor();
+    await itens.getByLabel('Quantidade').fill('5');
+    await pagina.locator('#destinatario').getByLabel('Cliente cadastrado').selectOption({ label: 'JOAO COMPRADOR (390.533.447-05)' });
+    await pagina.getByText('Todos os campos obrigatórios preenchidos').waitFor();
+    await pagina.getByRole('button', { name: 'Emitir nota' }).click();
+    await pagina.locator('.resultado').getByText('Estoque atualizado em 1 produto.').waitFor({ timeout: 15000 });
+    await itens.getByLabel('Produto cadastrado').locator('option', { hasText: 'MILHO (MILHO01) · 15 SC' }).waitFor({ state: 'attached' });
+
+    // painel avisa o estoque baixo
+    await pagina.getByRole('tab', { name: 'Painel' }).click();
+    await pagina.locator('.painel-cartao', { hasText: 'Estoque abaixo do mínimo' }).getByText('15 SC').waitFor();
+    await print('17-painel-estoque');
+
+    // cancelar a nota devolve ao estoque
+    await pagina.getByRole('tab', { name: 'Notas emitidas' }).click();
+    await pagina.locator('.tabela-notas tbody tr').first().click();
+    await pagina.getByRole('dialog').getByRole('button', { name: 'Cancelar nota' }).click();
+    const canc = pagina.getByRole('dialog');
+    await canc.locator('textarea').fill('Cancelamento de teste do estoque');
+    await canc.getByRole('button', { name: 'Cancelar a nota' }).click();
+    await pagina.getByText(/Cancelamento: 135/).waitFor();
+    await pagina.keyboard.press('Escape');
+    await pagina.getByRole('tab', { name: 'Produtos' }).click();
+    await pagina.locator('.tabela-notas tbody tr', { hasText: 'MILHO01' }).getByText('20 SC').waitFor();
   });
 
   test('troca de produtor separa notas, produtos e numeração', async () => {
@@ -478,7 +592,7 @@ describe('interface (Edge + SEFAZ simulada)', () => {
     const cartaoCpf = pagina.locator('.cartao-produtor[data-documento="52998224725"]');
     await cartaoCpf.getByRole('button', { name: 'Usar este produtor' }).click();
     await pagina.getByRole('tab', { name: 'Notas emitidas' }).click();
-    await pagina.locator('.tabela-notas tbody tr').first().getByText('Autorizada').waitFor();
+    await pagina.locator('.tabela-notas tbody tr').first().getByText('Cancelada').waitFor();
     await pagina.getByRole('tab', { name: 'Produtores' }).click();
     await cartaoCpf.getByText('Em uso').waitFor();
     await print('06-produtores');
@@ -528,6 +642,95 @@ describe('interface (Edge + SEFAZ simulada)', () => {
     await pagina.getByRole('button', { name: 'Entrar' }).click();
     await pagina.getByRole('heading', { name: 'Escolha o produtor' }).waitFor(); // sessão nova começa sem produtor
     assert.equal(await pagina.locator('.cartao-produtor').count(), 2);
+  });
+
+  test('tema escuro: alterna, guarda a escolha e mantém tudo legível', async () => {
+    const tema = () => pagina.evaluate(() => document.documentElement.dataset.tema);
+    await pagina.locator('.cartao-produtor[data-documento="52998224725"]').getByRole('button', { name: 'Usar este produtor' }).click();
+    await pagina.getByRole('tab', { name: 'Emitir nota', selected: true }).waitFor();
+
+    // O marcador das abas acompanha a aba ativa.
+    await pagina.getByRole('tab', { name: 'Clientes' }).click();
+    await pagina.waitForTimeout(400);
+    const alinhado = await pagina.evaluate(() => {
+      const m = document.querySelector('.abas-marcador').getBoundingClientRect();
+      const b = document.querySelector('.abas button.ativa').getBoundingClientRect();
+      return Math.abs(m.left - b.left) < 1 && Math.abs(m.width - b.width) < 1;
+    });
+    assert.equal(alinhado, true);
+
+    const percorrer = async (nomeTema) => {
+      const achados = [];
+      for (const aba of ['Painel', 'Emitir nota', 'Notas emitidas', 'Clientes', 'Produtos', 'Produtores', 'Administração']) {
+        await pagina.getByRole('tab', { name: aba }).click();
+        await pagina.getByRole('tab', { name: aba, selected: true }).waitFor();
+        for (const p of await auditarCores(nomeTema)) achados.push(`[${nomeTema}/${aba}] ${p}`);
+        await print(`20-${nomeTema}-${aba.split(' ')[0].toLowerCase()}`);
+      }
+      // Janelas também: cadastro de produto e histórico de estoque.
+      await pagina.getByRole('tab', { name: 'Produtos' }).click();
+      await pagina.getByRole('button', { name: '+ Novo produto' }).click();
+      await pagina.getByRole('dialog').getByLabel('Controlar estoque deste produto').check();
+      for (const p of await auditarCores(nomeTema)) achados.push(`[${nomeTema}/novo produto] ${p}`);
+      await print(`21-${nomeTema}-janela`);
+      await pagina.keyboard.press('Escape');
+      return achados;
+    };
+
+    assert.equal(await tema(), 'claro');
+    const noClaro = await percorrer('claro');
+
+    await pagina.getByRole('button', { name: 'Ativar tema escuro' }).click();
+    assert.equal(await tema(), 'escuro');
+    assert.equal(await pagina.evaluate(() => getComputedStyle(document.documentElement).colorScheme), 'dark');
+    const noEscuro = await percorrer('escuro');
+    assert.deepEqual([...noClaro, ...noEscuro], []);
+
+    // Nenhuma aba cria barra de rolagem lateral nas larguras comuns (notebook, tablet, celular).
+    const transbordos = [];
+    for (const largura of [1920, 1440, 1366, 1280, 1100, 900, 768, 390]) {
+      await pagina.setViewportSize({ width: largura, height: 800 });
+      for (const aba of ['Painel', 'Emitir nota', 'Notas emitidas', 'Clientes', 'Produtos', 'Produtores', 'Administração']) {
+        await pagina.getByRole('tab', { name: aba }).click();
+        await pagina.waitForTimeout(350);
+        const m = await pagina.evaluate(() => {
+          const raiz_ = document.documentElement;
+          const fora = [...document.querySelectorAll('.topo *')].filter((e) => !e.closest('.abas') && e.getClientRects().length && e.getBoundingClientRect().right > raiz_.clientWidth + 0.5);
+          return { pagina: raiz_.scrollWidth - raiz_.clientWidth, topo: fora.length };
+        });
+        if (m.pagina > 0 || m.topo > 0) transbordos.push(`${largura}px/${aba}: ${JSON.stringify(m)}`);
+      }
+      if (largura === 1366 || largura === 390) await print(`24-largura-${largura}`);
+    }
+    await pagina.setViewportSize({ width: 1440, height: 900 });
+    assert.deepEqual(transbordos, []);
+
+    // A escolha sobrevive ao recarregar, sem esperar o React.
+    await pagina.reload();
+    assert.equal(await tema(), 'escuro');
+    await pagina.getByRole('button', { name: 'Ativar tema claro' }).waitFor();
+
+    // A tela de login também alterna e fica legível.
+    await pagina.locator('.botao-usuario').click();
+    await pagina.getByRole('menuitem', { name: 'Sair' }).click();
+    await pagina.getByRole('heading', { name: 'Entrar' }).waitFor();
+    await pagina.waitForTimeout(500); // fim da animação de entrada do cartão
+    await pagina.getByText('Modelo 55 · homologação').waitFor();
+    await print('22-login-escuro');
+    assert.deepEqual(await auditarCores('escuro'), []);
+    await pagina.getByRole('button', { name: 'Ativar tema claro' }).click();
+    assert.equal(await tema(), 'claro');
+    await print('23-login-claro');
+
+    // Quem pede menos movimento vê o valor final na hora e não recebe animação.
+    await pagina.emulateMedia({ reducedMotion: 'reduce' });
+    await pagina.getByLabel('Usuário').fill('rodrigo');
+    await pagina.getByLabel('Senha').fill('senha-do-admin');
+    await pagina.getByRole('button', { name: 'Entrar' }).click();
+    await pagina.getByRole('heading', { name: 'Escolha o produtor' }).waitFor();
+    const duracao = await pagina.evaluate(() => getComputedStyle(document.querySelector('.transicao-pagina')).animationDuration);
+    assert.ok(parseFloat(duracao) < 0.01, `duração ${duracao}`);
+    await pagina.emulateMedia({ reducedMotion: null });
   });
 
   test('nenhum erro de JavaScript na página', () => {
