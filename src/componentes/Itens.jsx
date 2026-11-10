@@ -57,7 +57,7 @@ function ItemCartao({ item, indice, aberto, onAlternar, onChange, onRemover, pod
             <Campo rotulo="Frete" valor={item.vFrete} onChange={s('vFrete')} largura="p" inputMode="decimal" placeholder="0,00" erro={decimal(item.vFrete)} />
           </div>
 
-          <Tributos item={item} onChange={onChange} valores={{ vICMS: moeda(t.vICMS), vPIS: moeda(t.vPIS), vCOFINS: moeda(t.vCOFINS) }} />
+          <Tributos item={item} onChange={onChange} valores={{ vICMS: moeda(t.vICMS), vPIS: moeda(t.vPIS), vCOFINS: moeda(t.vCOFINS), vIBS: moeda(t.vIBS), vCBS: moeda(t.vCBS) }} />
 
           <div className="grade">
             <Campo rotulo="Informações adicionais do item" valor={item.infAdProd} onChange={s('infAdProd')} largura="cheia" />

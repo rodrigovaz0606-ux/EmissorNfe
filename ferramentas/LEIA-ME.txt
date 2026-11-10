@@ -1,0 +1,23 @@
+EMISSOR NF-e (HOMOLOGAÇÃO) — COMO USAR NESTE PC
+================================================
+
+1. Dê dois cliques em INICIAR.bat.
+   O navegador abre em http://localhost:3335. Deixe a janela preta aberta enquanto usa.
+   Se o Windows avisar sobre o programa, escolha "Mais informações" > "Executar assim mesmo".
+
+2. Primeiro acesso: crie o usuário administrador (nome, usuário e senha).
+
+3. Aba Produtores > "+ Adicionar produtor": escolha o arquivo .pfx do certificado A1 e digite a senha.
+   O certificado fica guardado CIFRADO só neste PC, na pasta data\.
+
+4. Preencha o emitente (Inscrição Estadual, endereço) e clique em "Salvar como padrão".
+   Depois preencha a nota, clique em "Validar" e, se estiver tudo certo, "Emitir nota".
+
+IMPORTANTE
+- Esta versão só emite em HOMOLOGAÇÃO: as notas NÃO têm valor fiscal.
+- A pasta data\ guarda o banco e a chave que protege os certificados (chave-mestra.key).
+  Não compartilhe a pasta data\ e não a envie para ninguém.
+- Para remover tudo deste PC depois do teste: na aba Produtores, use "Remover"
+  (apaga o certificado guardado) e depois apague a pasta inteira do emissor.
+- Se a porta 3335 estiver ocupada, edite o arquivo .env e acrescente a linha PORT=3340
+  (e abra http://localhost:3340).

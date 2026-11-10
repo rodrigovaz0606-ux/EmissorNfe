@@ -1,6 +1,6 @@
 import React from 'react';
 import { api, EVENTO_SESSAO } from './api.js';
-import { notaVazia, totaisNota, pendencias, avisos, avisosEstoque, paraPayload, notaDoPayload, digitos } from './modelo.js';
+import { notaVazia, totaisNota, pendencias, avisos, avisosEstoque, paraPayload, notaDoPayload, digitos, serieAdequada, serieSugerida } from './modelo.js';
 import { Identificacao } from './componentes/Identificacao.jsx';
 import { Emitente } from './componentes/Emitente.jsx';
 import { Destinatario } from './componentes/Destinatario.jsx';
@@ -128,6 +128,15 @@ function Emissao({ produtor, emissor, onVerNotas, produtos, carregarProdutos, cl
     } catch { /* API fora do ar: mantém o número digitado */ }
   }, []);
   React.useEffect(() => { sugerirNumero(nota.ide.serie); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Série errada para o tipo de emitente (CPF usa 920 a 969): troca e busca o próximo número dela.
+  const docEmitente = nota.emit.CPF || nota.emit.CNPJ;
+  React.useEffect(() => {
+    if (!docEmitente || serieAdequada(nota)) return;
+    const nova = serieSugerida(nota);
+    setNota((n) => ({ ...n, ide: { ...n.ide, serie: nova } }));
+    sugerirNumero(nova, true);
+  }, [docEmitente]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const totais = totaisNota(nota);
   const listaPendencias = pendencias(nota);

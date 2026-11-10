@@ -68,3 +68,14 @@ fn le_protocolo_do_nfe_proc_e_marca_cancelada() {
     assert!(texto.contains("152260000000001 - 03/11/2026 13:16:25"));
     assert!(ler_nota_para_danfe("<x/>").is_err());
 }
+
+#[test]
+fn guia_de_transito_aparece_nos_dados_adicionais() {
+    let (xml, _) = xml_exemplo(|d| {
+        d.itens[0].NCM = Some(json!("01022990"));
+        d.agropecuario = Some(serde_json::from_value(json!({ "guiaTransito": { "tpGuia": "1", "UFGuia": "GO", "nGuia": "987654" } })).unwrap());
+    });
+    let n = ler_nota_para_danfe(&xml).unwrap();
+    assert_eq!(n.guia.as_deref(), Some("GTA nº 987654 - GO"));
+    assert_eq!(&gerar_danfe(&xml, false).unwrap()[..5], b"%PDF-");
+}

@@ -160,6 +160,7 @@ pub struct NotaDanfe {
     pub inf_ad_fisco: String,
     pub inf_cpl: String,
     pub referenciadas: Vec<String>,
+    pub guia: Option<String>,
     /// (nProt, dhRecbto) quando autorizada.
     pub protocolo: Option<(String, String)>,
 }
@@ -261,6 +262,19 @@ pub fn ler_nota_para_danfe(xml: &str) -> Result<NotaDanfe> {
         inf_ad_fisco: caminho(inf, "infAdic/infAdFisco").unwrap_or_default(),
         inf_cpl: caminho(inf, "infAdic/infCpl").unwrap_or_default(),
         referenciadas: filhos(ide, "NFref").map(|r| t(r, "refNFe")).collect(),
+        guia: filho(inf, "agropecuario").and_then(|a| filho(a, "guiaTransito")).map(|g| {
+            let tipo = match t(g, "tpGuia").as_str() {
+                "1" => "GTA",
+                "2" => "TTA",
+                "3" => "DTA",
+                "4" => "ATV",
+                "5" => "PTV",
+                "6" => "GTV",
+                _ => "Guia florestal",
+            };
+            let serie = t(g, "serieGuia");
+            format!("{tipo} nº {}{} - {}", t(g, "nGuia"), if serie.is_empty() { String::new() } else { format!(" série {serie}") }, t(g, "UFGuia"))
+        }),
         protocolo: inf_prot
             .filter(|i| matches!(txt(*i, "cStat").as_deref(), Some("100") | Some("150")))
             .map(|i| (t(i, "nProt"), t(i, "dhRecbto"))),
@@ -557,7 +571,7 @@ fn linha_produto(d: &mut Documento, item: &ItemDanfe, y: f32) -> f32 {
 fn bloco_adicionais(d: &mut Documento, n: &NotaDanfe, y: f32, h: f32) {
     let y = titulo_bloco(d, y, "DADOS ADICIONAIS");
     let referenciadas = n.referenciadas.iter().map(|c| format!("NF-e referenciada: {c}")).collect::<Vec<_>>().join("\n");
-    let texto = [referenciadas.as_str(), n.inf_ad_fisco.as_str(), n.inf_cpl.as_str()]
+    let texto = [referenciadas.as_str(), n.guia.as_deref().unwrap_or(""), n.inf_ad_fisco.as_str(), n.inf_cpl.as_str()]
         .iter()
         .filter(|s| !s.is_empty())
         .copied()

@@ -1,7 +1,7 @@
 import React from 'react';
 import { Secao, Campo, Selecao } from './campos.jsx';
 import { NATUREZAS, TP_NF, FIN_NFE, IND_FINAL, IND_PRES, TIPOS_NOTA } from '../opcoes.js';
-import { idDestDe, aplicarTipoNota, aceitaReferencia, precisaReferencia, digitos } from '../modelo.js';
+import { idDestDe, aplicarTipoNota, aceitaReferencia, precisaReferencia, digitos, serieAdequada, emitenteCpf } from '../modelo.js';
 
 const OPCOES_TIPO = [...TIPOS_NOTA.map((t) => [t.id, t.rotulo]), ['', 'Personalizada']];
 
@@ -46,7 +46,11 @@ export function Identificacao({ nota, set, onSerie }) {
           lista="naturezas" erro={!ide.natOp.trim() && 'Informe a natureza da operação'}
         />
         <datalist id="naturezas">{NATUREZAS.map((n) => <option key={n} value={n} />)}</datalist>
-        <Campo rotulo="Série" valor={ide.serie} onChange={s('serie')} onBlur={() => onSerie?.(ide.serie)} largura="pp" inputMode="numeric" />
+        <Campo
+          rotulo="Série" valor={ide.serie} onChange={s('serie')} onBlur={() => onSerie?.(ide.serie)} largura="pp" inputMode="numeric"
+          erro={!serieAdequada(nota) && (emitenteCpf(nota) ? 'CPF: 920 a 969' : '920 a 969 é de CPF')}
+          dica={emitenteCpf(nota) ? 'CPF: 920 a 969' : undefined}
+        />
         <Campo rotulo="Número" valor={ide.nNF} onChange={s('nNF')} largura="p" inputMode="numeric" obrigatorio erro={!(Number(ide.nNF) >= 1) && 'Inválido'} />
         <Selecao rotulo="Tipo" valor={ide.tpNF} onChange={s('tpNF')} opcoes={TP_NF} largura="p" />
         <Selecao rotulo="Finalidade" valor={ide.finNFe} onChange={s('finNFe')} opcoes={FIN_NFE} largura="p" />

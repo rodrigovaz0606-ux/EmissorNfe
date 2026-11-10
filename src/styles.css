@@ -626,3 +626,8 @@ button.indicador:hover { border-color: var(--cor); }
 @media (max-width: 900px) {
   .pagina-notas .conteudo-lista { overflow-x: auto; }
 }
+
+.bloco-guia { display: flex; flex-direction: column; gap: 10px; }
+.bloco-guia > .dica { margin: 0; }
+
+.tributo-largo { grid-column: 1 / -1; }

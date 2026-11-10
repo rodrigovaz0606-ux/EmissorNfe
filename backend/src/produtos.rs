@@ -94,6 +94,19 @@ pub fn validar_produto(v: &Value) -> Result<Value> {
         return Err(negocio(format!("Estoque mínimo inválido: {estoque_minimo}")));
     }
 
+    let c_benef = texto(v, "cBenef").to_uppercase();
+    if !c_benef.is_empty()
+        && c_benef != "SEM CBENEF"
+        && !((c_benef.len() == 8 || c_benef.len() == 10) && c_benef.chars().all(|x| x.is_ascii_alphanumeric()))
+    {
+        return Err(negocio("Código de benefício fiscal (cBenef): 8 ou 10 letras/números, ou SEM CBENEF."));
+    }
+
+    let c_class_trib = v.get("ibscbs").map(|i| texto(i, "cClassTrib")).filter(|c| !c.is_empty()).unwrap_or_else(|| "410014".into());
+    if !["410014", "000001", "200036"].contains(&c_class_trib.as_str()) {
+        return Err(negocio(format!("Classificação do IBS/CBS não suportada: {c_class_trib}")));
+    }
+
     let vazio = Value::Object(Map::new());
     let icms = v.get("icms").unwrap_or(&vazio);
     let pis = v.get("pis").unwrap_or(&vazio);
@@ -111,6 +124,8 @@ pub fn validar_produto(v: &Value) -> Result<Value> {
         "CFOP": cfop,
         "uCom": u_com,
         "vUnCom": v_un_com,
+        "cBenef": c_benef,
+        "ibscbs": { "cClassTrib": c_class_trib },
         "controlaEstoque": controla_estoque,
         "estoqueMinimo": estoque_minimo,
         "icms": {

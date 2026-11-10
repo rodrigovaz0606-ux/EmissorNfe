@@ -239,7 +239,9 @@ export function Notas({ emissor, filtroInicial, onDuplicar }) {
   React.useEffect(() => { carregar(); }, [carregar]);
 
   const filtrar = (campo) => (e) => {
-    setFiltros((f) => ({ ...f, [campo]: e.target.value }));
+    // Lê o valor já no evento: a função de atualização pode rodar depois que o React restaurou o campo.
+    const valor = e.target.value;
+    setFiltros((f) => ({ ...f, [campo]: valor }));
     if (campo !== 'busca') setPagina(1);
   };
   const temFiltro = Object.values(filtros).some(Boolean);

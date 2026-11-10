@@ -9,7 +9,7 @@ pub fn venda_soja(cpf_emitente: &str, nome_emitente: &str) -> DadosNFe {
     serde_json::from_value(json!({
         "ide": {
             "natOp": "VENDA DE PRODUCAO DO ESTABELECIMENTO",
-            "serie": 1,
+            "serie": 920,        // emitente CPF: séries 920 a 969 (NT 2018.001)
             "nNF": 1,
             "tpNF": 1,           // saída
             "idDest": 1,         // operação interna
@@ -40,7 +40,8 @@ pub fn venda_soja(cpf_emitente: &str, nome_emitente: &str) -> DadosNFe {
         "itens": [{
             "cProd": "SOJA01", "xProd": "SOJA EM GRAOS", "NCM": "12019000", "CFOP": "5101",
             "uCom": "SC", "qCom": 500, "vUnCom": 132.5,
-            "icms": { "orig": 0, "CST": "51" }, // diferimento
+            "ibscbs": { "cClassTrib": "410014" }, // produtor rural não contribuinte (IBS/CBS)
+                "icms": { "orig": 0, "CST": "51" }, // diferimento
             "pis": { "CST": "08" },
             "cofins": { "CST": "08" }
         }],

@@ -93,6 +93,8 @@ export function Resumo({ totais, pendencias, avisos, ocupado, resultado, onValid
           <span>ICMS {moeda(totais.vICMS)}</span>
           <span>PIS {moeda(totais.vPIS)}</span>
           <span>COFINS {moeda(totais.vCOFINS)}</span>
+          <span title="Reforma tributária, fase de teste em 2026 (não soma no total da nota)">IBS {moeda(totais.vIBS)}</span>
+          <span title="Reforma tributária, fase de teste em 2026 (não soma no total da nota)">CBS {moeda(totais.vCBS)}</span>
         </div>
       </div>
 

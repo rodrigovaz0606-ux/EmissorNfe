@@ -62,7 +62,31 @@ fn totais_da_soja() {
     assert_eq!(pegar(&g.xml, "vPag").unwrap(), "66250.00");
     assert_eq!(pegar(&g.xml, "qCom").unwrap(), "500.0000");
     assert_eq!(pegar(&g.xml, "vUnCom").unwrap(), "132.50");
-    assert_eq!(pegar(&g.xml, "serie").unwrap(), "1");
+    assert_eq!(pegar(&g.xml, "serie").unwrap(), "920");
+}
+
+#[test]
+fn serie_por_tipo_de_emitente() {
+    // CPF fora de 920-969 cairia na rejeição 407 da SEFAZ: barrado antes de enviar.
+    let mut d = cenario();
+    d.ide.as_mut().unwrap().serie = Some(json!(1));
+    let erro = gerar_xml_nfe(&d, &config()).unwrap_err().to_string();
+    assert!(erro.contains("920 a 969"), "{erro}");
+    for serie in [920, 969] {
+        d.ide.as_mut().unwrap().serie = Some(json!(serie));
+        let g = gerar_xml_nfe(&d, &config()).unwrap();
+        assert_eq!(&g.chave[22..25], format!("{serie:03}"), "série na chave");
+        assert_eq!(&g.chave[6..20], "00052998224725", "CPF com zeros à esquerda na chave");
+    }
+    // CNPJ não pode usar a faixa do CPF
+    let mut c = cenario();
+    let emit = c.emit.as_mut().unwrap();
+    emit.CPF = None;
+    emit.CNPJ = Some(json!("12345678000195"));
+    c.ide.as_mut().unwrap().serie = Some(json!(920));
+    assert!(gerar_xml_nfe(&c, &config()).unwrap_err().to_string().contains("reservadas"));
+    c.ide.as_mut().unwrap().serie = Some(json!(1));
+    assert!(gerar_xml_nfe(&c, &config()).is_ok());
 }
 
 #[test]
@@ -179,7 +203,7 @@ fn valores_como_texto_do_formulario() {
     let mut d = cenario();
     d.itens[0].qCom = Some(json!("500"));
     d.itens[0].vUnCom = Some(json!("132,50"));
-    d.ide.as_mut().unwrap().serie = Some(json!("1"));
+    d.ide.as_mut().unwrap().serie = Some(json!("920"));
     let g = gerar_xml_nfe(&d, &config()).unwrap();
     assert_eq!(g.v_nf, "66250.00");
 }
@@ -221,4 +245,185 @@ fn xsd_aponta_campo_errado() {
 
     let r = validar_xsd(&assinado.replace("<xBairro>CENTRO</xBairro>", ""), Pacote::Nfe).unwrap();
     assert!(r.erros[0].contains("Elemento 'cMun': não esperado aqui. Esperado: ( xBairro, xCpl )"), "{:#?}", r.erros);
+}
+
+#[test]
+fn codigo_de_beneficio_fiscal() {
+    // Goiás exige cBenef em CST com benefício (rejeição 930). Vai em <prod>, antes do CFOP.
+    let mut d = cenario();
+    d.itens[0].cBenef = Some(json!(" go811001 "));
+    let g = gerar_xml_nfe(&d, &config()).unwrap();
+    assert!(g.xml.contains("<NCM>12019000</NCM><cBenef>GO811001</cBenef><CFOP>5101</CFOP>"), "{}", g.xml);
+    d.itens[0].cBenef = Some(json!("SEM CBENEF"));
+    assert!(gerar_xml_nfe(&d, &config()).unwrap().xml.contains("<cBenef>SEM CBENEF</cBenef>"));
+    for ruim in ["GO81", "GO 81100", "GO81100!"] {
+        d.itens[0].cBenef = Some(json!(ruim));
+        assert!(gerar_xml_nfe(&d, &config()).unwrap_err().to_string().contains("cBenef"), "{ruim}");
+    }
+    d.itens[0].cBenef = Some(json!(""));
+    assert!(!gerar_xml_nfe(&d, &config()).unwrap().xml.contains("cBenef"));
+}
+
+fn com_boi(d: &mut DadosNFe) {
+    d.itens[0].NCM = Some(json!("01022990")); // bovino vivo
+    d.itens[0].xProd = Some(json!("BOI GORDO"));
+    d.itens[0].uCom = Some(json!("CB"));
+}
+
+#[test]
+fn guia_de_transito_animal() {
+    use emissor_nfe::fiscal::nfe::{Agropecuario, GuiaTransito};
+    use emissor_nfe::fiscal::xsd::{Pacote, validar_xsd};
+    // Goiás: boi vivo sem GTA é rejeição 836, barrada antes de enviar.
+    let mut d = cenario();
+    com_boi(&mut d);
+    let erro = gerar_xml_nfe(&d, &config()).unwrap_err().to_string();
+    assert!(erro.contains("836") && erro.contains("Item 1"), "{erro}");
+
+    // Com GTA: grupo no fim de infNFe e XML válido no schema oficial (PL_010).
+    d.agropecuario = Some(Agropecuario {
+        guiaTransito: Some(GuiaTransito { tpGuia: Some(json!("1")), UFGuia: Some(json!("go")), serieGuia: Some(json!("A")), nGuia: Some(json!("123456")) }),
+    });
+    let g = gerar_xml_nfe(&d, &config()).unwrap();
+    assert!(
+        g.xml.ends_with("<agropecuario><guiaTransito><tpGuia>1</tpGuia><UFGuia>GO</UFGuia><serieGuia>A</serieGuia><nGuia>123456</nGuia></guiaTransito></agropecuario></infNFe></NFe>"),
+        "{}",
+        &g.xml[g.xml.len() - 300..]
+    );
+    let assinado = emissor_nfe::fiscal::assinatura::assinar_nfe(&g.xml, &emissor_nfe::fiscal::certificado::certificado_de_teste()).unwrap();
+    let xsd = validar_xsd(&assinado, Pacote::Nfe).unwrap();
+    assert!(xsd.valido, "{:?}", xsd.erros);
+
+    // Formato da guia
+    let mut ruim = d.clone();
+    ruim.agropecuario.as_mut().unwrap().guiaTransito.as_mut().unwrap().nGuia = Some(json!("12A"));
+    assert!(gerar_xml_nfe(&ruim, &config()).unwrap_err().to_string().contains("Número da guia"));
+    ruim.agropecuario.as_mut().unwrap().guiaTransito.as_mut().unwrap().nGuia = Some(json!("1234567890"));
+    assert!(gerar_xml_nfe(&ruim, &config()).is_err());
+
+    // CFOP de retorno/transferência dispensa a GTA; devolução (finNFe 4) também.
+    let mut retorno = cenario();
+    com_boi(&mut retorno);
+    retorno.itens[0].CFOP = Some(json!("5949"));
+    assert!(gerar_xml_nfe(&retorno, &config()).is_ok());
+
+    // 310: guia de animal numa nota sem animal vivo.
+    let mut soja = cenario();
+    soja.agropecuario = d.agropecuario.clone();
+    assert!(gerar_xml_nfe(&soja, &config()).unwrap_err().to_string().contains("310"));
+}
+
+/// Comparação com a libxml2 (ver ferramentas/comparar_xsd.py). Só roda com COMPARAR_XSD_DIR definido:
+/// 1ª fase grava amostras assinadas (certificado fictício); 2ª fase valida cada .xml da pasta.
+#[test]
+fn comparacao_xsd_com_libxml2() {
+    use emissor_nfe::fiscal::assinatura::assinar_nfe;
+    use emissor_nfe::fiscal::certificado::certificado_de_teste;
+    use emissor_nfe::fiscal::xsd::{Pacote, validar_xsd};
+    let Ok(pasta) = std::env::var("COMPARAR_XSD_DIR") else { return };
+    let pasta = std::path::PathBuf::from(pasta);
+    let cert = certificado_de_teste();
+    if std::env::var("COMPARAR_XSD_FASE").as_deref() == Ok("gerar") {
+        let mut amostras: Vec<(&str, DadosNFe)> = vec![("soja_cpf", cenario())];
+        let mut boi = cenario();
+        com_boi(&mut boi);
+        boi.agropecuario = Some(serde_json::from_value(json!({ "guiaTransito": { "tpGuia": "1", "UFGuia": "GO", "serieGuia": "A", "nGuia": "123456" } })).unwrap());
+        amostras.push(("boi_gta", boi));
+        let mut benef = cenario();
+        benef.itens[0].cBenef = Some(json!("GO811001"));
+        amostras.push(("cbenef", benef));
+        let mut dev = cenario();
+        let ide = dev.ide.as_mut().unwrap();
+        ide.finNFe = Some(json!(4));
+        ide.refNFe = vec![json!("52261112345678000195550010000000011482017365")];
+        amostras.push(("devolucao", dev));
+        let mut integral = cenario();
+        com_classificacao(&mut integral, "000001");
+        amostras.push(("ibscbs_integral", integral));
+        let mut reducao = cenario();
+        com_classificacao(&mut reducao, "200036");
+        amostras.push(("ibscbs_reducao", reducao));
+        for (nome, d) in amostras {
+            let g = gerar_xml_nfe(&d, &config()).unwrap();
+            std::fs::write(pasta.join(format!("base_{nome}.xml")), assinar_nfe(&g.xml, &cert).unwrap()).unwrap();
+        }
+        return;
+    }
+    let mut saida = String::new();
+    let mut nomes: Vec<_> = std::fs::read_dir(&pasta).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "xml")).collect();
+    nomes.sort();
+    for p in nomes {
+        let xml = std::fs::read_to_string(&p).unwrap();
+        let valido = validar_xsd(&xml, Pacote::Nfe).map(|r| r.valido).unwrap_or(false);
+        saida.push_str(&format!("{}\t{}\n", p.file_name().unwrap().to_string_lossy(), valido));
+    }
+    std::fs::write(pasta.join("emissor.tsv"), saida).unwrap();
+}
+
+fn com_classificacao(d: &mut DadosNFe, c: &str) {
+    d.itens[0].ibscbs = Some(emissor_nfe::fiscal::nfe::IbsCbs { cClassTrib: Some(json!(c)) });
+}
+
+fn validar_assinado(xml: &str) {
+    use emissor_nfe::fiscal::xsd::{Pacote, validar_xsd};
+    let assinado = emissor_nfe::fiscal::assinatura::assinar_nfe(xml, &emissor_nfe::fiscal::certificado::certificado_de_teste()).unwrap();
+    let r = validar_xsd(&assinado, Pacote::Nfe).unwrap();
+    assert!(r.valido, "{:?}", r.erros);
+}
+
+#[test]
+fn ibs_cbs_produtor_rural_nao_contribuinte() {
+    // CST 410 proíbe o grupo de valores (ind_gIBSCBS = 0): só CST e cClassTrib. Total com base zero.
+    let g = gerar_xml_nfe(&cenario(), &config()).unwrap();
+    assert!(g.xml.contains("</COFINS><IBSCBS><CST>410</CST><cClassTrib>410014</cClassTrib></IBSCBS></imposto>"), "{}", g.xml);
+    assert!(g.xml.contains("</ICMSTot><IBSCBSTot><vBCIBSCBS>0.00</vBCIBSCBS></IBSCBSTot></total>"));
+    validar_assinado(&g.xml);
+}
+
+#[test]
+fn ibs_cbs_tributacao_integral_2026() {
+    // Soja: 500 × 132,50 = 66.250,00; ICMS 51 e PIS/COFINS 08 sem valor → base 66.250,00.
+    // IBS UF 0,10% = 66,25 · IBS município 0% · CBS 0,90% = 596,25 (regras UB18, UB37, UB56).
+    let mut d = cenario();
+    com_classificacao(&mut d, "000001");
+    let g = gerar_xml_nfe(&d, &config()).unwrap();
+    assert!(g.xml.contains(
+        "<IBSCBS><CST>000</CST><cClassTrib>000001</cClassTrib><gIBSCBS><vBC>66250.00</vBC><gIBSUF><pIBSUF>0.1000</pIBSUF><vIBSUF>66.25</vIBSUF></gIBSUF><gIBSMun><pIBSMun>0.0000</pIBSMun><vIBSMun>0.00</vIBSMun></gIBSMun><vIBS>66.25</vIBS><gCBS><pCBS>0.9000</pCBS><vCBS>596.25</vCBS></gCBS></gIBSCBS></IBSCBS>"
+    ), "{}", g.xml);
+    assert!(g.xml.contains("<IBSCBSTot><vBCIBSCBS>66250.00</vBCIBSCBS><gIBS><gIBSUF><vDif>0.00</vDif><vDevTrib>0.00</vDevTrib><vIBSUF>66.25</vIBSUF></gIBSUF>"));
+    assert!(g.xml.contains("<vIBS>66.25</vIBS><vCredPres>0.00</vCredPres><vCredPresCondSus>0.00</vCredPresCondSus></gIBS><gCBS><vDif>0.00</vDif><vDevTrib>0.00</vDevTrib><vCBS>596.25</vCBS>"));
+    validar_assinado(&g.xml);
+
+    // A base desconta ICMS, PIS e COFINS (regra UB16): ICMS 00 a 12% sobre 66.250 = 7.950 → base 58.300.
+    d.itens[0].icms = Some(serde_json::from_value(json!({ "orig": 0, "CST": "00", "pICMS": 12 })).unwrap());
+    let g = gerar_xml_nfe(&d, &config()).unwrap();
+    assert!(g.xml.contains("<vBC>58300.00</vBC><gIBSUF><pIBSUF>0.1000</pIBSUF><vIBSUF>58.30</vIBSUF>"), "{}", g.xml);
+}
+
+#[test]
+fn ibs_cbs_agropecuario_in_natura_com_reducao() {
+    // 60% de redução: alíquota efetiva UF 0,1 × 0,4 = 0,04%; CBS 0,9 × 0,4 = 0,36% (regra UB28).
+    let mut d = cenario();
+    com_classificacao(&mut d, "200036");
+    let g = gerar_xml_nfe(&d, &config()).unwrap();
+    assert!(g.xml.contains("<gIBSUF><pIBSUF>0.1000</pIBSUF><gRed><pRedAliq>60.0000</pRedAliq><pAliqEfet>0.0400</pAliqEfet></gRed><vIBSUF>26.50</vIBSUF></gIBSUF>"), "{}", g.xml);
+    assert!(g.xml.contains("<gCBS><pCBS>0.9000</pCBS><gRed><pRedAliq>60.0000</pRedAliq><pAliqEfet>0.3600</pAliqEfet></gRed><vCBS>238.50</vCBS></gCBS>"));
+    validar_assinado(&g.xml);
+}
+
+#[test]
+fn ibs_cbs_recusas() {
+    let mut d = cenario();
+    com_classificacao(&mut d, "999999");
+    assert!(gerar_xml_nfe(&d, &config()).unwrap_err().to_string().contains("não suportada"));
+    d.itens[0].ibscbs = None;
+    assert!(gerar_xml_nfe(&d, &config()).unwrap_err().to_string().contains("cClassTrib"));
+    // 2027: a CBS ainda aguarda legislação; não inventa alíquota.
+    let mut d = cenario();
+    com_classificacao(&mut d, "000001");
+    d.ide.as_mut().unwrap().dhEmi = Some(json!("2027-01-05T10:00:00-03:00"));
+    assert!(gerar_xml_nfe(&d, &config()).unwrap_err().to_string().contains("2027"));
+    // ...mas o produtor não contribuinte (sem valores) continua emitindo.
+    com_classificacao(&mut d, "410014");
+    assert!(gerar_xml_nfe(&d, &config()).is_ok());
 }

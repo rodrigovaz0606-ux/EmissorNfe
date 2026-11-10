@@ -16,7 +16,7 @@ export function Secao({ id, numero, titulo, descricao, acoes, children }) {
   );
 }
 
-// Campo de texto. `erro` aparece só depois que o usuário mexeu no campo.
+// Campo de texto. `erro` aparece depois que o usuário preencheu algo e saiu do campo.
 // O <label> contém só o nome do campo; dica e erro ficam ligados por aria-describedby.
 export function Campo({ rotulo, valor, onChange, onBlur, erro, dica, largura = 'm', obrigatorio, lista, ...resto }) {
   const [tocado, setTocado] = React.useState(false);
@@ -34,7 +34,9 @@ export function Campo({ rotulo, valor, onChange, onBlur, erro, dica, largura = '
         id={id}
         value={valor ?? ''}
         onChange={(e) => onChange(e.target.value)}
-        onBlur={(e) => { setTocado(true); onBlur?.(e); }}
+        // Campo vazio que só perdeu o foco não vira erro: a mensagem empurraria a tela no meio de um
+        // clique em outro lugar (o clique se perderia). O que falta aparece nas pendências.
+        onBlur={(e) => { if (String(valor ?? '') !== '') setTocado(true); onBlur?.(e); }}
         list={lista}
         required={obrigatorio}
         aria-invalid={mostrarErro ? true : undefined}

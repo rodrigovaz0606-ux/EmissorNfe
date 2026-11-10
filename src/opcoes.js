@@ -84,3 +84,17 @@ export const T_PAG = [
   ['01', 'Dinheiro'], ['02', 'Cheque'], ['03', 'Cartão de crédito'], ['04', 'Cartão de débito'], ['15', 'Boleto'],
   ['16', 'Depósito bancário'], ['17', 'PIX'], ['18', 'Transferência bancária'], ['90', 'Sem pagamento'],
 ];
+
+// Guia de trânsito (NT 2024.003). 1 a 3 são de animais; 4 a 6 de vegetais; 7 florestal.
+export const TIPOS_GUIA = [
+  ['1', 'GTA — Guia de Trânsito Animal'], ['2', 'TTA — Termo de Trânsito Animal'], ['3', 'DTA — Documento de Transferência Animal'],
+  ['4', 'ATV — Autorização de Trânsito Vegetal'], ['5', 'PTV — Permissão de Trânsito Vegetal'], ['6', 'GTV — Guia de Trânsito Vegetal'],
+  ['7', 'Guia florestal (DOF, SisFlora, SIAM)'],
+];
+
+// Classificação do IBS/CBS (reforma tributária). Conferidas na tabela oficial (IT 2025.002 v1.71).
+export const CLASSIFICACOES_IBSCBS = [
+  ['410014', '410014 — Produtor rural não contribuinte (receita até R$ 3,6 mi/ano)'],
+  ['200036', '200036 — Produto agropecuário in natura (redução de 60%)'],
+  ['000001', '000001 — Tributação integral'],
+];

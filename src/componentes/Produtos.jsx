@@ -146,7 +146,7 @@ function FormularioProduto({ inicial, onSalvo, onFechar }) {
 
         <div className="bloco-estoque">
           <label className="marcador">
-            <input type="checkbox" checked={Boolean(p.controlaEstoque)} onChange={(e) => setP((x) => ({ ...x, controlaEstoque: e.target.checked }))} />
+            <input type="checkbox" checked={Boolean(p.controlaEstoque)} onChange={(e) => { const marcado = e.target.checked; setP((x) => ({ ...x, controlaEstoque: marcado })); }} />
             Controlar estoque deste produto
           </label>
           {p.controlaEstoque && (

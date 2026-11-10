@@ -17,7 +17,8 @@
     "gerar": "cargo run -q --manifest-path backend/Cargo.toml -- gerar",
     "validar": "cargo run -q --manifest-path backend/Cargo.toml -- validar",
     "enviar": "cargo run -q --manifest-path backend/Cargo.toml -- enviar",
-    "consultar": "cargo run -q --manifest-path backend/Cargo.toml -- consultar"
+    "consultar": "cargo run -q --manifest-path backend/Cargo.toml -- consultar",
+    "empacotar": "powershell -NoProfile -ExecutionPolicy Bypass -File ferramentas/empacotar.ps1"
   },
   "dependencies": {
     "react": "^18.3.1",

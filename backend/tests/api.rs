@@ -145,6 +145,7 @@ fn nota(n_nf: i64) -> Value {
     let mut d = serde_json::to_value(venda_soja("52998224725", "EMPRESA TESTE")).unwrap();
     d["emit"]["CPF"] = Value::Null;
     d["emit"]["CNPJ"] = json!("12345678000195");
+    d["ide"]["serie"] = json!(1); // CNPJ usa série comum (920-969 é de CPF)
     d["ide"]["nNF"] = json!(n_nf);
     d
 }
@@ -863,4 +864,21 @@ async fn estoque_acompanha_as_notas() {
     let r = api.post("/nfe/emitir", nota_do_produto(7, "NAOEXISTE", json!(1), "SC")).await.json();
     assert_eq!(r["status"], json!("autorizada"), "{r}");
     assert_eq!(r["estoque"]["movimentados"], json!(0));
+}
+
+#[tokio::test]
+async fn emitente_cpf_usa_serie_920_a_969() {
+    let api = Api::nova().await;
+    api.post("/produtores", envio_pfx(PFX_CPF, "teste")).await; // e-CPF fictício
+    let mut d = serde_json::to_value(venda_soja("52998224725", "PRODUTOR TESTE")).unwrap();
+    d["ide"]["serie"] = json!(1);
+    let r = api.post("/nfe/emitir", d.clone()).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert!(r.json()["erro"].as_str().unwrap().contains("920 a 969"));
+    assert_eq!(api.get("/notas").await.json()["total"], json!(0), "nada é gravado nem enviado");
+
+    d["ide"]["serie"] = json!(920);
+    let r = api.post("/nfe/emitir", d).await.json();
+    assert_eq!(r["status"], json!("autorizada"), "{r}");
+    assert_eq!(api.get("/numeracao/920").await.json()["proximo"], json!(2));
 }

@@ -173,6 +173,9 @@ describe('interface (Edge + SEFAZ simulada)', () => {
     await pagina.getByText('SEFAZ SIMULADA — modo de teste').waitFor();
     await pagina.getByText('SEFAZ em operação').waitFor();
     assert.match(await pagina.locator('.produtor-atual').innerText(), /PRODUTOR TESTE[\s\S]*e-CPF 529\.982\.247-25/);
+    // Emitente com CPF: série 920 a 969 (NT 2018.001), senão a SEFAZ rejeita com 407.
+    await pagina.getByRole('heading', { name: /Nota fiscal nº 1 série 920/ }).waitFor();
+    assert.equal(await pagina.locator('#identificacao').getByLabel('Série').inputValue(), '920');
     assert.equal(await pagina.getByRole('button', { name: 'Emitir nota' }).isDisabled(), true);
     assert.match(await pagina.locator('.pendencias summary').innerText(), /\d+ pendências/);
   });
@@ -459,6 +462,28 @@ describe('interface (Edge + SEFAZ simulada)', () => {
     assert.equal(await itens.locator('.item.aberto').getByLabel('CFOP').inputValue(), '5201');
     await pagina.getByRole('button', { name: 'Nova nota' }).click();
     await ident.getByLabel('Chave da NF-e referenciada').waitFor({ state: 'detached' });
+  });
+
+  test('animal vivo: pede a GTA e a nota com guia passa no schema oficial', async () => {
+    await pagina.getByRole('button', { name: 'Nova nota' }).click();
+    const itens = pagina.locator('#itens');
+    if (!(await itens.locator('.item.aberto').count())) await itens.locator('.item-cabecalho').first().click(); // item recolhido
+    await itens.getByLabel('Descrição').fill('BOI GORDO');
+    await itens.getByLabel('NCM').fill('0102.29.90');
+    await itens.getByLabel('Unidade').fill('CB');
+    await itens.getByLabel('Valor unitário').fill('3500');
+    await pagina.locator('#destinatario').getByLabel('Cliente cadastrado').selectOption({ label: 'JOAO COMPRADOR (390.533.447-05)' });
+    await pagina.locator('.pendencias').getByText('Item 1: animal vivo exige a Guia de Trânsito Animal (seção 5)').waitFor({ state: 'attached' });
+    const pag = pagina.locator('#pagamento');
+    await pag.getByLabel('Número da guia').fill('123456');
+    await pag.getByLabel('Série', { exact: true }).fill('A');
+    await print('18-gta');
+    await pagina.getByText('Todos os campos obrigatórios preenchidos').waitFor();
+    await pagina.getByRole('button', { name: 'Validar' }).click();
+    await pagina.locator('.resultado').getByText('Pronta para emitir').waitFor();
+    assert.match(await pagina.locator('.resultado').innerText(), /Schema \(XSD\)\s+Estrutura válida/);
+    await pagina.getByRole('button', { name: 'Nova nota' }).click();
+    await pag.getByLabel('Número da guia').waitFor({ state: 'detached' });
   });
 
   test('exporta o ZIP para o contador e avisa quando não há nada', async () => {

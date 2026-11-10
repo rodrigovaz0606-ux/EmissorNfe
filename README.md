@@ -25,6 +25,10 @@ Abra http://localhost:5175. A API (Rust) fica em http://localhost:3335 e só ace
 - **Validar**: gera, assina e confere o XML no XSD, sem enviar. **Emitir**: envia para a SEFAZ em homologação
 - **Produtos**: cadastro (código, descrição, NCM, CFOP, unidade, preço e tributação) salvo no SQLite; na nota, escolha o produto em "Produto cadastrado" para preencher o item, ou salve um item digitado com "Salvar no cadastro de produtos"
 - **Tema claro e escuro** (botão no topo e na tela de login). Sem escolha salva, segue o sistema. As animações são desligadas para quem ativa "reduzir movimento" no sistema
+- **Emitente pessoa física (CPF)**: usa a série 920 a 969 (NT 2018.001), escolhida sozinha pela tela; fora dela a SEFAZ rejeita com 407. Em Goiás o CPF precisa estar credenciado como emissor de NF-e na SEFAZ-GO
+- **Código de benefício fiscal (cBenef)** no item e no produto: Goiás exige quando o CST indica benefício (rejeição 930). O código vem da tabela da SEFAZ-GO (peça ao contador)
+- **IBS/CBS (reforma tributária, NT 2025.002)** em cada item, com três classificações conferidas na tabela oficial (IT 2025.002 v1.71): **410014** produtor rural não contribuinte (receita até R$ 3,6 mi/ano, padrão), **200036** produto agropecuário in natura (redução de 60%) e **000001** tributação integral. Alíquotas de 2026: IBS UF 0,1%, IBS município 0%, CBS 0,9% (fase de teste, sem recolhimento). A escolha certa é do contador
+- **Guia de trânsito (GTA)** para animal vivo (NT 2024.003, rejeição 836), com tipo, UF, série e número. Notas com guia sem animal vivo são barradas (310)
 - **Estoque** (opcional por produto): saldo, estoque mínimo e histórico. Entrada, saída e ajuste de contagem são manuais; nota autorizada baixa (saída) ou aumenta (entrada) o saldo, e o cancelamento devolve. Falta de saldo só gera aviso, não impede a emissão. Item com unidade diferente da do cadastro não mexe no saldo e é avisado
 - **Clientes**: cadastro de destinatários; na nota, escolha em "Cliente cadastrado" ou salve o destinatário digitado
 - **Tipo de nota**: modelos de venda, remessa, devolução e entrada que preenchem natureza, CFOP e pagamento (confira com o contador se servem para a sua operação). Devolução e complementar pedem a chave da NF-e referenciada
@@ -111,7 +115,9 @@ Os comandos chamam o binário `emissor-nfe` (`cargo run -- <comando>`); ele tamb
 | `estoque.rs` | Saldo por movimentos: manuais, notas autorizadas e estorno no cancelamento |
 | `relatorios.rs` | Painel e exportação em ZIP para o contador |
 
-O validador XSD foi comparado com a libxml2 em 1.283 documentos adulterados (elementos removidos, duplicados e valores inválidos). Os veredictos coincidiram em todos, exceto 3 casos de base64 inválido no certificado, em que o validador próprio é mais rígido. As assinaturas também foram conferidas por outra implementação (xml-crypto).
+Os schemas da NF-e são os do pacote oficial **PL_010g v1.03** (Portal Nacional da NF-e, 26/10/2026); inutilização e eventos seguem nos pacotes anteriores. Para repetir a comparação com a libxml2: `python ferramentas/comparar_xsd.py <pasta>` (precisa de `lxml`). Na última rodada foram 3.671 documentos sem divergência real: as 8 diferenças são um defeito da libxml2, que aceita `cEAN` com 20 ou 21 dígitos no padrão `[0-9]{12,14}`.
+
+Na migração para Rust, o validador XSD foi comparado com a libxml2 em 1.283 documentos adulterados (elementos removidos, duplicados e valores inválidos). Os veredictos coincidiram em todos, exceto 3 casos de base64 inválido no certificado, em que o validador próprio é mais rígido. As assinaturas também foram conferidas por outra implementação (xml-crypto).
 
 ## Roteiro
 
@@ -124,6 +130,9 @@ O validador XSD foi comparado com a libxml2 em 1.283 documentos adulterados (ele
 - [x] Login, usuários, administrador e vários produtores (certificados cifrados)
 - [x] Clientes, duplicar nota, filtros, exportação para o contador, painel e tipos de nota
 - [x] Controle de estoque por produto
-- [ ] Autorização real (cStat 100): precisa de um e-CNPJ com IE em GO (a SEFAZ-GO rejeita emitente CPF com 407)
-- [ ] Atualizar schemas para o PL_010 (reforma tributária: IBS/CBS)
+- [x] Autorização real (cStat 100) em homologação na SEFAZ-GO com emitente CPF (produtor rural), em 09/11/2026: série 920, IBS/CBS 410014
+- [ ] Liberar produção (decisão do usuário, com o contador e a autorização do produtor)
+- [x] Schemas atualizados para o PL_010g (validador lê o pacote; grupos de IBS/CBS ainda não são preenchidos pela tela)
+- [x] Grupo IBS/CBS por item e totais (NT 2025.002), com 3 classificações
+- [ ] Mais classificações de IBS/CBS (diferimento, crédito presumido etc.) conforme a necessidade; alíquotas de 2027 quando publicadas
 - [ ] Cadeia ICP-Brasil em `NFE_CA_BUNDLE` para verificar o certificado do servidor da SEFAZ

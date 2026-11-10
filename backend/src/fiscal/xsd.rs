@@ -33,7 +33,7 @@ pub enum Pacote {
 impl Pacote {
     fn arquivos(self) -> (&'static str, &'static str) {
         match self {
-            Pacote::Nfe => ("PL_009g_V4_00_NT_2020_005_v120", "nfe_v4.00.xsd"),
+            Pacote::Nfe => ("PL_010g_v1.03/NFe", "nfe_v4.00.xsd"), // pacote oficial de 26/10/2026 (NT 2024.003, NT 2025.002...)
             Pacote::Inutilizacao => ("PL_009g_V4_00_NT_2020_005_v120", "inutNFe_v4.00.xsd"),
             Pacote::Cancelamento => ("Evento_Canc_PL_v1.01", "envEventoCancNFe_v1.00.xsd"),
             Pacote::Cce => ("Evento_CCe_PL_v1.01", "envCCe_v1.00.xsd"),
@@ -96,6 +96,16 @@ struct Facetas {
     tamanho: Option<usize>,
     min: Option<usize>,
     max: Option<usize>,
+    /// minInclusive, só para AAAA-MM (gYearMonth): (ano, mês).
+    min_ano_mes: Option<(i64, u32)>,
+}
+
+/// "AAAA-MM" (com fuso opcional depois) → (ano, mês).
+fn ler_ano_mes(v: &str) -> Option<(i64, u32)> {
+    let (sinal, resto) = v.strip_prefix('-').map_or((1, v), |r| (-1, r));
+    let (ano, resto) = resto.split_once('-')?;
+    let mes: u32 = resto.get(..2)?.parse().ok()?;
+    Some((sinal * ano.parse::<i64>().ok()?, mes))
 }
 
 #[derive(Debug)]
@@ -214,18 +224,29 @@ impl Schema {
     pub fn carregar(pasta: &Path, principal: &str) -> Result<Schema> {
         // Lê o principal e tudo o que ele inclui/importa (mesma pasta).
         let mut textos: Vec<(String, String)> = Vec::new();
-        let mut fila = vec![principal.to_string()];
+        // (arquivo, namespace de quem o incluiu): um xs:include de arquivo sem targetNamespace
+        // ("chameleon include", como o DFeTiposBasicos do PL_010) adota o namespace de quem inclui.
+        let mut fila: Vec<(String, Option<String>)> = vec![(principal.to_string(), None)];
         let mut vistos = HashSet::new();
-        let re_local = Regex::new(r#"schemaLocation="([^"]+)""#).unwrap();
-        while let Some(arq) = fila.pop() {
+        let re_inclusao = Regex::new(r#"<xs:(include|import)\b[^>]*\bschemaLocation="([^"]+)""#).unwrap();
+        let re_ns = Regex::new(r#"<xs:schema\b[^>]*\btargetNamespace="([^"]+)""#).unwrap();
+        while let Some((arq, herdado)) = fila.pop() {
             if !vistos.insert(arq.clone()) {
                 continue;
             }
             let caminho = pasta.join(&arq);
             let bruto = std::fs::read(&caminho).with_context(|| format!("Schema não encontrado: {}", caminho.display()))?;
-            let texto = String::from_utf8_lossy(&bruto).trim_start_matches('\u{feff}').to_string();
-            for local in re_local.captures_iter(&texto) {
-                fila.push(local[1].to_string());
+            let mut texto = String::from_utf8_lossy(&bruto).trim_start_matches('\u{feff}').to_string();
+            let proprio = re_ns.captures(&texto).map(|c| c[1].to_string());
+            if let (None, Some(ns)) = (&proprio, &herdado) {
+                // Como manda a especificação: tudo passa a pertencer ao namespace de quem incluiu,
+                // inclusive as referências sem prefixo (por isso o xmlns padrão).
+                texto = texto.replacen("<xs:schema ", &format!("<xs:schema targetNamespace=\"{ns}\" xmlns=\"{ns}\" "), 1);
+            }
+            let ns_efetivo = proprio.or(herdado);
+            for c in re_inclusao.captures_iter(&texto) {
+                let herda = if &c[1] == "include" { ns_efetivo.clone() } else { None };
+                fila.push((c[2].to_string(), herda));
             }
             textos.push((arq, texto));
         }
@@ -301,6 +322,18 @@ impl<'d> Montador<'d> {
                 "token" | "anyURI" | "dateTime" | "date" | "NCName" => Primitivo::Token,
                 "base64Binary" => Primitivo::Base64,
                 "anyType" | "anySimpleType" => Primitivo::Qualquer,
+                "gYearMonth" => {
+                    // AAAA-MM com fuso opcional (PL_010: competência de apuração do IBS/CBS).
+                    let padrao = r"-?[0-9]{4,}-(0[1-9]|1[0-2])(Z|[+-]((0[0-9]|1[0-3]):[0-5][0-9]|14:00))?";
+                    let facetas = Facetas {
+                        padroes: vec![("gYearMonth".into(), Regex::new(&format!("^(?:{padrao})$"))?)],
+                        ..Default::default()
+                    };
+                    let id = self.novo_tipo();
+                    self.tipos[id] = Tipo::Simples(TipoSimples { primitivo: Primitivo::Token, restricoes: vec![Arc::new(facetas)] });
+                    self.tipos_prontos.insert(q.clone(), id);
+                    return Ok(id);
+                }
                 outro => bail!("Tipo nativo XSD não suportado: {outro}"),
             };
             let id = self.primitivo(p);
@@ -368,6 +401,15 @@ impl<'d> Montador<'d> {
                 "length" => f.tamanho = Some(valor.parse()?),
                 "minLength" => f.min = Some(valor.parse()?),
                 "maxLength" => f.max = Some(valor.parse()?),
+                "minInclusive" => {
+                    // Único uso no PL_010: competência AAAA-MM a partir de 2025-01. Outros usos são recusados
+                    // na carga, para o validador nunca deixar passar algo que não sabe conferir.
+                    let base = restr.attribute("base").unwrap_or("");
+                    if !base.ends_with("gYearMonth") {
+                        bail!("Faceta minInclusive só é suportada em gYearMonth (base {base})");
+                    }
+                    f.min_ano_mes = Some(ler_ano_mes(valor).with_context(|| format!("minInclusive inválido: {valor}"))?);
+                }
                 "whiteSpace" if valor == "preserve" => {}
                 "simpleType" => {}
                 outro => bail!("Faceta XSD não suportada: {outro} {valor}"),
@@ -444,6 +486,10 @@ impl<'d> Montador<'d> {
             let campo = filhos_xs(u).find(|c| e_xs(c, "field")).and_then(|c| c.attribute("xpath"));
             match (sel, campo) {
                 (Some("./*"), Some(f)) if f.starts_with('@') => campos.push(f[1..].to_string()),
+                // Seletor com nome sem prefixo (ex.: "gPgto" no PL_010): no XSD 1.0, nome sem prefixo em
+                // XPath de restrição de identidade é elemento SEM namespace. Os da NF-e têm namespace,
+                // então a regra não seleciona nada, nem aqui nem nos validadores XSD 1.0 da SEFAZ.
+                (Some(s_), Some(f)) if f.starts_with('@') && !s_.contains([':', '/', '*', '[']) => {}
                 _ => bail!("unique não suportado: {sel:?} {campo:?}"),
             }
         }
@@ -685,6 +731,12 @@ impl Schema {
             if !f.padroes.is_empty() && !f.padroes.iter().any(|(_, re)| re.is_match(valor)) {
                 erros.push(format!("{onde}: o valor '{}' não atende ao padrão '{}'.", resumir(valor), resumir(&f.padroes[0].0)));
                 return;
+            }
+            if let Some(min) = f.min_ano_mes {
+                if ler_ano_mes(valor).is_none_or(|v| v < min) {
+                    erros.push(format!("{onde}: o valor '{}' é anterior a {:04}-{:02}.", resumir(valor), min.0, min.1));
+                    return;
+                }
             }
         }
     }

@@ -1,7 +1,30 @@
 import React from 'react';
 import { Secao, Campo, Selecao } from './campos.jsx';
-import { MOD_FRETE, T_PAG } from '../opcoes.js';
-import { moeda, num } from '../modelo.js';
+import { MOD_FRETE, T_PAG, TIPOS_GUIA, UFS } from '../opcoes.js';
+import { moeda, num, digitos, guiaVazia, temAnimalVivo, guiaPreenchida } from '../modelo.js';
+
+// Guia de trânsito (NT 2024.003): aparece quando a nota tem animal vivo ou já tem guia preenchida.
+function GuiaTransito({ nota, set }) {
+  const g = nota.guia ?? guiaVazia();
+  const s = (campo) => (v) => set(['guia'], { ...g, [campo]: v });
+  return (
+    <div className="bloco-guia">
+      <h3 className="subtitulo">Guia de trânsito</h3>
+      <p className="dica">
+        Animal vivo exige a GTA emitida pela Agrodefesa. A SEFAZ confere se a guia existe e se já foi usada em outra nota.
+      </p>
+      <div className="grade">
+        <Selecao rotulo="Tipo de guia" valor={g.tpGuia} onChange={s('tpGuia')} opcoes={TIPOS_GUIA} largura="g" />
+        <Selecao rotulo="UF da guia" valor={g.UFGuia} onChange={s('UFGuia')} opcoes={UFS} largura="pp" />
+        <Campo rotulo="Série" valor={g.serieGuia} onChange={s('serieGuia')} largura="pp" maxLength={9} dica="Se a guia tiver" />
+        <Campo
+          rotulo="Número da guia" valor={g.nGuia} onChange={(v) => s('nGuia')(digitos(v).slice(0, 9))} largura="pp" inputMode="numeric" obrigatorio
+          erro={!digitos(g.nGuia) && 'Informe o número'}
+        />
+      </div>
+    </div>
+  );
+}
 
 export function Pagamento({ nota, set, vNF }) {
   const pag = nota.pag;
@@ -34,6 +57,8 @@ export function Pagamento({ nota, set, vNF }) {
       <div className="grade">
         <Selecao rotulo="Modalidade do frete" valor={nota.transp.modFrete} onChange={(v) => set(['transp', 'modFrete'], v)} opcoes={MOD_FRETE} largura="m" />
       </div>
+
+      {(temAnimalVivo(nota) || guiaPreenchida(nota)) && <GuiaTransito nota={nota} set={set} />}
 
       <h3 className="subtitulo">Informações complementares</h3>
       <textarea

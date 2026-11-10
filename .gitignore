@@ -12,3 +12,6 @@ saida/
 backend/target/
 # certificados FICTÍCIOS de teste (autoassinados, não são de ninguém)
 !backend/tests/fixtures/*.pfx
+
+# pasta portátil gerada por npm run empacotar
+pacote/

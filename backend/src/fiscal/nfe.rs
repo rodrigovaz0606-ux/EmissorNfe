@@ -22,6 +22,22 @@ use serde_json::Value;
 pub const NOME_DEST_HOMOLOGACAO: &str = "NF-E EMITIDA EM AMBIENTE DE HOMOLOGACAO - SEM VALOR FISCAL";
 const VER_PROC: &str = "EmissorNfe 0.2";
 
+/// Séries reservadas a emitente pessoa física (CPF), pela NT 2018.001. Com CPF fora desta faixa,
+/// a SEFAZ entende que seria Nota Avulsa e rejeita com 407.
+pub const SERIES_CPF: std::ops::RangeInclusive<i64> = 920..=969;
+
+/// Confere se a série combina com o tipo de emitente (CPF ou CNPJ).
+pub fn conferir_serie(documento: &str, serie: i64) -> Result<()> {
+    let cpf = documento.len() == 11;
+    if cpf && !SERIES_CPF.contains(&serie) {
+        bail!("Emitente com CPF deve usar série de 920 a 969 (NT 2018.001). Informada: {serie}.");
+    }
+    if !cpf && SERIES_CPF.contains(&serie) {
+        bail!("As séries de 920 a 969 são reservadas a emitente com CPF. Use outra série para CNPJ.");
+    }
+    Ok(())
+}
+
 /// Valor vindo do JSON (texto ou número).
 pub type V = Option<Value>;
 
@@ -184,8 +200,17 @@ pub struct PisCofins {
     pub pCOFINS: V,
 }
 
+/// IBS/CBS do item (reforma tributária, NT 2025.002). O CST são os 3 primeiros dígitos do cClassTrib.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct IbsCbs {
+    #[serde(default)]
+    pub cClassTrib: V,
+}
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Item {
+    #[serde(default)]
+    pub ibscbs: Option<IbsCbs>,
     #[serde(default)]
     pub cProd: V,
     #[serde(default)]
@@ -285,6 +310,82 @@ pub struct DadosNFe {
     pub infAdic: Option<InfAdic>,
     #[serde(default)]
     pub respTec: Option<RespTec>,
+    /// Grupo ZF (NT 2024.003): por enquanto só a guia de trânsito.
+    #[serde(default)]
+    pub agropecuario: Option<Agropecuario>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct Agropecuario {
+    #[serde(default)]
+    pub guiaTransito: Option<GuiaTransito>,
+}
+
+/// Guia de trânsito (NT 2024.003, grupo ZF04). tpGuia: 1 GTA, 2 TTA, 3 DTA (animais);
+/// 4 ATV, 5 PTV, 6 GTV (vegetais); 7 guia florestal.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct GuiaTransito {
+    #[serde(default)]
+    pub tpGuia: V,
+    #[serde(default)]
+    pub UFGuia: V,
+    #[serde(default)]
+    pub serieGuia: V,
+    #[serde(default)]
+    pub nGuia: V,
+}
+
+/// Animal vivo na NT 2024.003: NCM 01xxxxxx e 0301xxxx.
+pub fn ncm_animal_vivo(ncm: &str) -> bool {
+    ncm.starts_with("01") || ncm.starts_with("0301")
+}
+
+/// CFOPs (pelos três últimos dígitos) dispensados da GTA na regra 836: retornos, transferências e afins.
+const CFOP_SEM_GTA: [&str; 13] = ["105", "106", "111", "112", "113", "114", "115", "155", "156", "907", "949", "454", "922"];
+
+const UFS_GUIA: [&str; 28] = [
+    "AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", "MG", "MS", "MT", "PA", "PB", "PE", "PI", "PR", "RJ", "RN", "RO", "RR", "RS",
+    "SC", "SE", "SP", "TO", "EX",
+];
+
+/// Grupo agropecuario (vai no fim de infNFe) e as regras 836/310 de Goiás, conferidas antes de enviar.
+fn bloco_agropecuario(dados: &DadosNFe, ide: &Ide, uf_emitente: &str) -> Result<String> {
+    let guia = dados.agropecuario.as_ref().and_then(|a| a.guiaTransito.as_ref()).filter(|g| s(&g.nGuia).is_some());
+    let tp_guia = guia.map(|g| ou(&g.tpGuia, "1"));
+    let guia_animal = tp_guia.as_deref().is_some_and(|t| ["1", "2", "3"].contains(&t));
+    let fin_normal = ou(&ide.finNFe, "1") == "1";
+    let itens_animais: Vec<usize> = dados
+        .itens
+        .iter()
+        .enumerate()
+        .filter(|(_, it)| digitos(&it.NCM).is_some_and(|n| ncm_animal_vivo(&n)))
+        .filter(|(_, it)| !digitos(&it.CFOP).is_some_and(|c| c.len() == 4 && CFOP_SEM_GTA.contains(&&c[1..])))
+        .map(|(i, _)| i + 1)
+        .collect();
+    if uf_emitente == "GO" {
+        if fin_normal && !itens_animais.is_empty() && !guia_animal {
+            let lista = itens_animais.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", ");
+            bail!("Item {lista}: animal vivo exige a Guia de Trânsito Animal (GTA, TTA ou DTA) — rejeição 836 em Goiás.");
+        }
+        let algum_animal = dados.itens.iter().any(|it| digitos(&it.NCM).is_some_and(|n| ncm_animal_vivo(&n)));
+        if guia_animal && !algum_animal {
+            bail!("Guia de trânsito animal informada, mas nenhum item é animal vivo (NCM 01 ou 0301) — rejeição 310.");
+        }
+    }
+    let Some(g) = guia else { return Ok(String::new()) };
+    let tp = tp_guia.unwrap_or_default();
+    exigir(("1"..="7").contains(&tp.as_str()) && tp.len() == 1, "Tipo de guia de trânsito inválido (1 a 7).")?;
+    let uf = s(&g.UFGuia).map(|u| u.trim().to_uppercase()).unwrap_or_default();
+    exigir(UFS_GUIA.contains(&uf.as_str()), "Informe a UF que emitiu a guia de trânsito.")?;
+    let serie = limpo(&g.serieGuia);
+    exigir(serie.as_ref().is_none_or(|x| x.chars().count() <= 9), "Série da guia: até 9 caracteres.")?;
+    let numero = digitos(&g.nGuia).unwrap_or_default();
+    let so_digitos_num = s(&g.nGuia).is_some_and(|n| n.trim().chars().all(|c| c.is_ascii_digit()));
+    exigir(so_digitos_num && (1..=9).contains(&numero.len()), "Número da guia: só números, até 9 dígitos.")?;
+    Ok(grupo(
+        "agropecuario",
+        &[grupo("guiaTransito", &[t("tpGuia", &tp), t("UFGuia", &uf), tag("serieGuia", serie), t("nGuia", &numero)])],
+    ))
 }
 
 // ---------- helpers de montagem ----------
@@ -511,6 +612,10 @@ fn bloco_pis_cofins(nome: &str, dados: &PisCofins, base: i64, n_item: usize) -> 
 
 #[derive(Default, Clone, Copy)]
 struct Totais {
+    v_bc_ibscbs: i64,
+    v_ibs_uf: i64,
+    v_ibs_mun: i64,
+    v_cbs: i64,
     v_prod: i64,
     v_frete: i64,
     v_seg: i64,
@@ -522,10 +627,84 @@ struct Totais {
     v_cofins: i64,
 }
 
-fn bloco_det(it: &Item, n_item: usize) -> Result<(String, Totais)> {
+// ---------- IBS/CBS (NT 2025.002) ----------
+
+/// Classificações suportadas: (cClassTrib, redução da alíquota em %, informa valores?).
+/// Conferidas na Tabela de Classificação Tributária oficial (IT 2025.002 v1.71) e na tabela
+/// de indicadores de CST: o CST 410 proíbe o grupo de valores (ind_gIBSCBS = 0).
+const CLASSIFICACOES_IBSCBS: [(&str, i64, bool); 3] = [
+    ("410014", 0, false), // fornecimento de produtor rural não contribuinte (art. 164 da LC 214/2025)
+    ("000001", 0, true),  // tributação integral
+    ("200036", 60, true), // produto agropecuário in natura, alíquota reduzida em 60% (art. 137)
+];
+
+/// Alíquotas do ano da emissão, em décimos de milésimo de ponto percentual (0,1% = 1000):
+/// (IBS da UF, IBS do município, CBS). Regras UB18, UB37 e UB56 da NT 2025.002.
+fn aliquotas_ibscbs(ano: i32) -> Result<(i64, i64, i64)> {
+    match ano {
+        2025 | 2026 => Ok((1000, 0, 9000)),
+        _ => bail!("Alíquotas de IBS/CBS para {ano} ainda não estão no emissor (a CBS de 2027 aguarda legislação). Atualize o emissor."),
+    }
+}
+
+fn percentual_4(p: i64) -> String {
+    format!("{}.{:04}", p / 10_000, p % 10_000)
+}
+
+/// Valor em centavos de base × alíquota (em décimos de milésimo de %), arredondado para cima no meio.
+pub fn valor_ibscbs(base: i64, aliquota: i64) -> i64 {
+    (base * aliquota + 500_000).div_euclid(1_000_000)
+}
+
+/// Alíquota efetiva com redução, 4 casas decimais (regra UB28 da NT).
+pub fn aliquota_efetiva(aliquota: i64, reducao_pct: i64) -> i64 {
+    (aliquota * (100 - reducao_pct) + 50) / 100
+}
+
+struct ValoresIbsCbs {
+    xml: String,
+    v_bc: i64,
+    v_uf: i64,
+    v_mun: i64,
+    v_cbs: i64,
+}
+
+fn bloco_ibscbs(ib: Option<&IbsCbs>, n_item: usize, base: i64, ano: i32) -> Result<ValoresIbsCbs> {
+    let c_class = ib.and_then(|i| digitos(&i.cClassTrib)).unwrap_or_default();
+    let Some(&(_, reducao, com_valores)) = CLASSIFICACOES_IBSCBS.iter().find(|(c, _, _)| *c == c_class) else {
+        bail!("Item {n_item}: classificação do IBS/CBS (cClassTrib) não informada ou não suportada: \"{c_class}\".");
+    };
+    let cst = &c_class[..3];
+    if !com_valores {
+        return Ok(ValoresIbsCbs { xml: grupo("IBSCBS", &[t("CST", cst), t("cClassTrib", &c_class)]), v_bc: 0, v_uf: 0, v_mun: 0, v_cbs: 0 });
+    }
+    let (p_uf, p_mun, p_cbs) = aliquotas_ibscbs(ano)?;
+    let parte = |nome: &str, campo_p: &str, campo_v: &str, p: i64| -> (String, i64) {
+        let efetiva = aliquota_efetiva(p, reducao);
+        let valor = valor_ibscbs(base, efetiva);
+        let mut filhos = vec![t(campo_p, &percentual_4(p))];
+        if reducao > 0 {
+            filhos.push(grupo("gRed", &[t("pRedAliq", &percentual_4(reducao * 10_000)), t("pAliqEfet", &percentual_4(efetiva))]));
+        }
+        filhos.push(t(campo_v, &centavos(valor)));
+        (grupo(nome, &filhos), valor)
+    };
+    let (uf, v_uf) = parte("gIBSUF", "pIBSUF", "vIBSUF", p_uf);
+    let (mun, v_mun) = parte("gIBSMun", "pIBSMun", "vIBSMun", p_mun);
+    let (cbs, v_cbs) = parte("gCBS", "pCBS", "vCBS", p_cbs);
+    let g = grupo("gIBSCBS", &[t("vBC", &centavos(base)), uf, mun, t("vIBS", &centavos(v_uf + v_mun)), cbs]);
+    Ok(ValoresIbsCbs { xml: grupo("IBSCBS", &[t("CST", cst), t("cClassTrib", &c_class), g]), v_bc: base, v_uf, v_mun, v_cbs })
+}
+
+fn bloco_det(it: &Item, n_item: usize, ano: i32) -> Result<(String, Totais)> {
     exigir(limpo(&it.xProd).is_some(), format!("Item {n_item}: xProd obrigatório."))?;
     exigir(digitos(&it.NCM).is_some_and(|d| d.len() == 8), format!("Item {n_item}: NCM deve ter 8 dígitos."))?;
     exigir(digitos(&it.CFOP).is_some_and(|d| d.len() == 4), format!("Item {n_item}: CFOP deve ter 4 dígitos."))?;
+    let c_benef = s(&it.cBenef).map(|c| c.trim().to_uppercase()).filter(|c| !c.is_empty());
+    if let Some(c) = &c_benef {
+        let formato = c == "SEM CBENEF" || ((c.len() == 8 || c.len() == 10) && c.chars().all(|x| x.is_ascii_alphanumeric()));
+        exigir(formato, format!("Item {n_item}: código de benefício fiscal (cBenef) deve ter 8 ou 10 letras/números, ou SEM CBENEF."))?;
+    }
     let q_com = n(&it.qCom)?.unwrap_or(0.0);
     exigir(q_com > 0.0, format!("Item {n_item}: qCom deve ser maior que zero."))?;
     let v_un = n(&it.vUnCom)?.unwrap_or(f64::NAN);
@@ -549,7 +728,7 @@ fn bloco_det(it: &Item, n_item: usize) -> Result<(String, Totais)> {
             tag("xProd", limpo(&it.xProd)),
             tag("NCM", digitos(&it.NCM)),
             tag("CEST", digitos(&it.CEST)),
-            tag("cBenef", s(&it.cBenef)),
+            tag("cBenef", c_benef),
             tag("CFOP", digitos(&it.CFOP)),
             tag("uCom", limpo(&it.uCom)),
             t("qCom", &fixo(q_com, 4)),
@@ -573,10 +752,13 @@ fn bloco_det(it: &Item, n_item: usize) -> Result<(String, Totais)> {
     let icms = bloco_icms(&it.icms.clone().unwrap_or_default(), n_item, base_icms)?;
     let pis = bloco_pis_cofins("PIS", &it.pis.clone().unwrap_or_default(), base_pis_cofins, n_item)?;
     let cofins = bloco_pis_cofins("COFINS", &it.cofins.clone().unwrap_or_default(), base_pis_cofins, n_item)?;
+    let base_ibscbs = v_prod + v_frete + v_seg + v_outro - v_desc - pis.valor - cofins.valor - icms.valor;
+    let ibscbs = bloco_ibscbs(it.ibscbs.as_ref(), n_item, base_ibscbs, ano)?;
 
     let xml = format!(
         "<det nItem=\"{n_item}\">{prod}{}{}</det>",
-        grupo("imposto", &[icms.xml, pis.xml, cofins.xml]),
+        // Base do IBS/CBS (regra UB16): produto + frete + seguro + outras − desconto − PIS − COFINS − ICMS.
+        grupo("imposto", &[icms.xml, pis.xml, cofins.xml, ibscbs.xml]),
         tag("infAdProd", limpo(&it.infAdProd)),
     );
     let _ = (pis.v_bc, cofins.v_bc);
@@ -589,11 +771,39 @@ fn bloco_det(it: &Item, n_item: usize) -> Result<(String, Totais)> {
             v_desc,
             v_outro,
             v_bc: icms.v_bc,
+            v_bc_ibscbs: ibscbs.v_bc,
+            v_ibs_uf: ibscbs.v_uf,
+            v_ibs_mun: ibscbs.v_mun,
+            v_cbs: ibscbs.v_cbs,
             v_icms: icms.valor,
             v_pis: pis.valor,
             v_cofins: cofins.valor,
         },
     ))
+}
+
+/// Totais do IBS/CBS (obrigatório quando algum item tem IBSCBS: rejeição 1119).
+fn bloco_ibscbs_total(t_: &Totais) -> String {
+    let c = |v: i64| centavos(v);
+    let tem_valores = t_.v_bc_ibscbs != 0 || t_.v_ibs_uf != 0 || t_.v_ibs_mun != 0 || t_.v_cbs != 0;
+    let mut filhos = vec![t("vBCIBSCBS", &c(t_.v_bc_ibscbs))];
+    if tem_valores {
+        filhos.push(grupo(
+            "gIBS",
+            &[
+                grupo("gIBSUF", &[t("vDif", &c(0)), t("vDevTrib", &c(0)), t("vIBSUF", &c(t_.v_ibs_uf))]),
+                grupo("gIBSMun", &[t("vDif", &c(0)), t("vDevTrib", &c(0)), t("vIBSMun", &c(t_.v_ibs_mun))]),
+                t("vIBS", &c(t_.v_ibs_uf + t_.v_ibs_mun)),
+                t("vCredPres", &c(0)),
+                t("vCredPresCondSus", &c(0)),
+            ],
+        ));
+        filhos.push(grupo(
+            "gCBS",
+            &[t("vDif", &c(0)), t("vDevTrib", &c(0)), t("vCBS", &c(t_.v_cbs)), t("vCredPres", &c(0)), t("vCredPresCondSus", &c(0))],
+        ));
+    }
+    grupo("IBSCBSTot", &filhos)
 }
 
 fn bloco_total(t_: &Totais) -> (i64, String) {
@@ -624,7 +834,7 @@ fn bloco_total(t_: &Totais) -> (i64, String) {
                 t("vOutro", &c(t_.v_outro)),
                 t("vNF", &c(v_nf)),
             ],
-        )],
+        ), bloco_ibscbs_total(t_)],
     );
     (v_nf, xml)
 }
@@ -679,6 +889,8 @@ pub fn gerar_xml_nfe(dados: &DadosNFe, config: &Config) -> Result<NFeGerada> {
 
     let dh_emi = s(&ide.dhEmi).unwrap_or_else(agora);
     let doc_emit = s(&emit.CNPJ).or_else(|| s(&emit.CPF)).unwrap_or_default();
+    let serie = s(&ide.serie).and_then(|t| t.trim().parse::<i64>().ok()).unwrap_or(-1);
+    conferir_serie(&so_digitos(&doc_emit), serie)?;
     let chave = montar_chave(&ParametrosChave {
         c_uf: &config.c_uf.to_string(),
         dh_emi: &dh_emi,
@@ -688,10 +900,11 @@ pub fn gerar_xml_nfe(dados: &DadosNFe, config: &Config) -> Result<NFeGerada> {
         c_nf: s(&ide.cNF).as_deref(),
     })?;
 
+    let ano: i32 = dh_emi.get(..4).and_then(|a| a.parse().ok()).unwrap_or(0);
     let mut dets = String::new();
     let mut tot = Totais::default();
     for (i, item) in dados.itens.iter().enumerate() {
-        let (xml, t_) = bloco_det(item, i + 1)?;
+        let (xml, t_) = bloco_det(item, i + 1, ano)?;
         dets.push_str(&xml);
         tot.v_prod += t_.v_prod;
         tot.v_frete += t_.v_frete;
@@ -699,6 +912,10 @@ pub fn gerar_xml_nfe(dados: &DadosNFe, config: &Config) -> Result<NFeGerada> {
         tot.v_desc += t_.v_desc;
         tot.v_outro += t_.v_outro;
         tot.v_bc += t_.v_bc;
+        tot.v_bc_ibscbs += t_.v_bc_ibscbs;
+        tot.v_ibs_uf += t_.v_ibs_uf;
+        tot.v_ibs_mun += t_.v_ibs_mun;
+        tot.v_cbs += t_.v_cbs;
         tot.v_icms += t_.v_icms;
         tot.v_pis += t_.v_pis;
         tot.v_cofins += t_.v_cofins;
@@ -716,8 +933,10 @@ pub fn gerar_xml_nfe(dados: &DadosNFe, config: &Config) -> Result<NFeGerada> {
         None => String::new(),
     };
 
+    let uf_emitente = emit.ender.as_ref().and_then(|e| s(&e.UF)).unwrap_or_default().to_uppercase();
+    let agropecuario = bloco_agropecuario(dados, ide, &uf_emitente)?; // depois de infRespTec, como no PL_010
     let inf_nfe = format!(
-        "<infNFe Id=\"NFe{}\" versao=\"4.00\">{}{}{}{dets}{total}{transp}{}{}{resp_tec}</infNFe>",
+        "<infNFe Id=\"NFe{}\" versao=\"4.00\">{}{}{}{dets}{total}{transp}{}{}{resp_tec}{agropecuario}</infNFe>",
         chave.chave,
         bloco_ide(ide, &dh_emi, config, &chave.c_nf, chave.c_dv)?,
         bloco_emit(emit)?,
