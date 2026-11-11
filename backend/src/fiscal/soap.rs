@@ -46,27 +46,46 @@ pub struct Requisicao<'a> {
     pub xml_dados: &'a str,
     pub certificado: &'a Certificado,
     pub tempo_limite: Duration,
+    /// Em produção o certificado do servidor da SEFAZ é sempre conferido.
+    pub producao: bool,
 }
 
-fn conector(cert: &Certificado) -> anyhow::Result<native_tls::TlsConnector> {
+/// Raízes da ICP-Brasil (v5, v10, v11, v12), baixadas do ITI (acraiz.icpbrasil.gov.br).
+/// O servidor de produção da SEFAZ-GO usa certificado AC SOLUTI SSL EV G4 → Raiz v10.
+const RAIZES_ICP_BRASIL: &str = include_str!("raizes-icp-brasil.pem");
+
+fn certificados_pem(pem: &str) -> Vec<String> {
+    pem.split("-----END CERTIFICATE-----")
+        .filter(|b| b.contains("-----BEGIN CERTIFICATE-----"))
+        .map(|b| format!("{}-----END CERTIFICATE-----\n", b.trim_start()))
+        .collect()
+}
+
+fn conector(cert: &Certificado, producao: bool) -> anyhow::Result<native_tls::TlsConnector> {
     let identidade = native_tls::Identity::from_pkcs12(&cert.pfx, &cert.senha)
         .map_err(|e| erro_rede(format!("O sistema não aceitou o certificado para a conexão TLS: {e}")))?;
     let mut b = native_tls::TlsConnector::builder();
     b.identity(identidade).min_protocol_version(Some(native_tls::Protocol::Tlsv12));
-    // Os servidores da SEFAZ usam certificados da ICP-Brasil. NFE_CA_BUNDLE (um .pem com a
-    // cadeia) liga a verificação do servidor; sem ela fica desligada (aceitável só em homologação).
-    match std::env::var("NFE_CA_BUNDLE").ok().filter(|c| !c.is_empty()) {
-        Some(caminho) => {
-            let pem = std::fs::read_to_string(&caminho).map_err(|e| erro_rede(format!("NFE_CA_BUNDLE ({caminho}): {e}")))?;
-            for bloco in pem.split("-----END CERTIFICATE-----").filter(|b| b.contains("-----BEGIN CERTIFICATE-----")) {
-                let c = native_tls::Certificate::from_pem(format!("{bloco}-----END CERTIFICATE-----\n").as_bytes())
-                    .map_err(|e| erro_rede(format!("Certificado inválido em NFE_CA_BUNDLE: {e}")))?;
-                b.add_root_certificate(c);
-            }
-        }
-        None => {
-            b.danger_accept_invalid_certs(true);
-        }
+    // Os servidores da SEFAZ usam certificados da ICP-Brasil, que o Windows não conhece por padrão.
+    // Produção: SEMPRE confere o servidor (raízes embutidas + NFE_CA_BUNDLE, se houver), inclusive o
+    // nome do host; se não bater, a conexão é recusada. Homologação: confere só com NFE_CA_BUNDLE.
+    let extra = match std::env::var("NFE_CA_BUNDLE").ok().filter(|c| !c.is_empty()) {
+        Some(caminho) => Some(std::fs::read_to_string(&caminho).map_err(|e| erro_rede(format!("NFE_CA_BUNDLE ({caminho}): {e}")))?),
+        None => None,
+    };
+    let mut raizes = vec![];
+    if producao {
+        raizes.extend(certificados_pem(RAIZES_ICP_BRASIL));
+    }
+    if let Some(pem) = &extra {
+        raizes.extend(certificados_pem(pem));
+    }
+    if raizes.is_empty() {
+        b.danger_accept_invalid_certs(true); // só homologação sem NFE_CA_BUNDLE
+    }
+    for pem in raizes {
+        let c = native_tls::Certificate::from_pem(pem.as_bytes()).map_err(|e| erro_rede(format!("Certificado raiz inválido: {e}")))?;
+        b.add_root_certificate(c);
     }
     b.build().map_err(|e| erro_rede(format!("Falha ao preparar TLS: {e}")))
 }
@@ -103,7 +122,7 @@ pub fn enviar_soap(r: &Requisicao) -> anyhow::Result<String> {
     let tcp = TcpStream::connect_timeout(&endereco, r.tempo_limite).map_err(tempo)?;
     tcp.set_read_timeout(Some(r.tempo_limite)).ok();
     tcp.set_write_timeout(Some(r.tempo_limite)).ok();
-    let mut tls = conector(r.certificado)?
+    let mut tls = conector(r.certificado, r.producao)?
         .connect(&host, tcp)
         .map_err(|e| erro_rede(format!("Falha no TLS com {host}: {e}")))?;
 
@@ -220,5 +239,27 @@ mod testes {
     fn envelope() {
         let e = envelope_soap("NFeStatusServico4", "<x/>");
         assert!(e.contains("<nfeDadosMsg xmlns=\"http://www.portalfiscal.inf.br/nfe/wsdl/NFeStatusServico4\"><x/></nfeDadosMsg>"));
+    }
+}
+
+#[cfg(test)]
+mod testes_raizes {
+    use super::*;
+
+    #[test]
+    fn raizes_icp_brasil_embutidas_sao_validas() {
+        let pems = certificados_pem(RAIZES_ICP_BRASIL);
+        assert_eq!(pems.len(), 4);
+        for p in &pems {
+            native_tls::Certificate::from_pem(p.as_bytes()).unwrap();
+            let der = base64::Engine::decode(
+                &base64::engine::general_purpose::STANDARD,
+                p.lines().filter(|l| !l.starts_with("-----")).collect::<String>(),
+            )
+            .unwrap();
+            let (_, c) = x509_parser::parse_x509_certificate(&der).unwrap();
+            assert!(c.subject().to_string().contains("Autoridade Certificadora Raiz Brasileira"), "{}", c.subject());
+            assert_eq!(c.subject(), c.issuer(), "raiz é autoassinada");
+        }
     }
 }

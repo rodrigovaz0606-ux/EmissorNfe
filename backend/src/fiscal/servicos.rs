@@ -21,12 +21,13 @@ use std::time::Duration;
 
 fn enviar(config: &Config, cert: &Certificado, servico: &str, metodo: &str, xml: &str, segundos: u64) -> Result<String> {
     enviar_soap(&Requisicao {
-        url: url_servico(&config.uf, servico)?,
+        url: url_servico(config, servico)?,
         servico,
         metodo,
         xml_dados: xml,
         certificado: cert,
         tempo_limite: Duration::from_secs(segundos),
+        producao: config.producao(),
     })
 }
 
@@ -300,9 +301,6 @@ fn detalhe_evento(tipo: TipoEvento, d: &DadosEvento) -> Result<String> {
 
 /// Monta o <evento> (ainda sem assinatura).
 pub fn montar_evento(tipo: TipoEvento, d: &DadosEvento, config: &Config) -> Result<String> {
-    if config.tp_amb != 2 {
-        bail!("Somente homologação (tpAmb=2) é permitida nesta versão.");
-    }
     if !validar_chave(&d.chave) {
         bail!("Chave de acesso inválida.");
     }
@@ -493,9 +491,6 @@ pub struct DadosInutilizacao {
 }
 
 pub fn montar_inut_nfe(d: &DadosInutilizacao, config: &Config) -> Result<String> {
-    if config.tp_amb != 2 {
-        bail!("Somente homologação (tpAmb=2) é permitida nesta versão.");
-    }
     let cnpj = so_digitos(&d.cnpj);
     if cnpj.len() != 14 {
         bail!("A inutilização exige emitente com CNPJ (o leiaute 4.00 não aceita CPF).");

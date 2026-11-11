@@ -881,7 +881,7 @@ pub struct NFeGerada {
 
 /// Monta o XML da NF-e (sem assinatura).
 pub fn gerar_xml_nfe(dados: &DadosNFe, config: &Config) -> Result<NFeGerada> {
-    exigir(config.tp_amb == 2, "Somente homologação (tpAmb=2) é permitida nesta versão.")?;
+    exigir(matches!(config.tp_amb, 1 | 2), "Ambiente inválido (tpAmb deve ser 1 ou 2).")?;
     let (Some(ide), Some(emit), Some(dest)) = (&dados.ide, &dados.emit, &dados.dest) else {
         bail!("Informe ide, emit e dest.");
     };

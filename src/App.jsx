@@ -142,10 +142,18 @@ function Emissao({ produtor, emissor, onVerNotas, produtos, carregarProdutos, cl
   const listaPendencias = pendencias(nota);
   const listaAvisos = [...avisos(nota), ...avisosEstoque(nota, produtos)];
   const homologacao = emissor?.ambiente === 'homologacao';
+  const producao = emissor?.ambiente === 'producao';
 
   async function executar(modo) {
     const destino = emissor?.simulada ? 'a SEFAZ SIMULADA (nada é enviado)' : `a SEFAZ-${emissor?.uf} em HOMOLOGAÇÃO (sem valor fiscal)`;
-    if (modo === 'emitir' && !window.confirm(`Enviar a nota nº ${nota.ide.nNF} de ${produtor.titular} para ${destino}?`)) return;
+    if (modo === 'emitir' && producao) {
+      // Produção: nota com valor fiscal real no nome do produtor. Exige digitar EMITIR.
+      const resposta = window.prompt(
+        `ATENÇÃO: NOTA FISCAL REAL (PRODUÇÃO)\n\nNota nº ${nota.ide.nNF} série ${nota.ide.serie}, de ${produtor.titular} (${produtor.tipo} ${produtor.documento}), `
+        + `para ${nota.dest.xNome || 'o destinatário'}.\nEla terá valor fiscal; se houver erro, será preciso cancelar.\n\nDigite EMITIR para confirmar:`,
+      );
+      if ((resposta ?? '').trim().toUpperCase() !== 'EMITIR') return;
+    } else if (modo === 'emitir' && !window.confirm(`Enviar a nota nº ${nota.ide.nNF} de ${produtor.titular} para ${destino}?`)) return;
     setOcupado(modo);
     setResultado(null);
     try {
@@ -227,7 +235,7 @@ function Emissao({ produtor, emissor, onVerNotas, produtos, carregarProdutos, cl
           <Pagamento nota={nota} set={set} vNF={totais.vNF} />
         </div>
         <Resumo
-          totais={totais} pendencias={listaPendencias} avisos={listaAvisos} ocupado={ocupado} resultado={resultado}
+          producao={producao} totais={totais} pendencias={listaPendencias} avisos={listaAvisos} ocupado={ocupado} resultado={resultado}
           onValidar={() => executar('validar')} onEmitir={() => executar('emitir')} onPrevia={() => executar('previa')}
           onVerNotas={onVerNotas} onNovaNota={novaNota}
         />
@@ -294,7 +302,9 @@ function Principal({ estado, onEstado, onSair }) {
             <h1>Emissor NF-e</h1>
             <span>Modelo 55 · SEFAZ-{estado.uf ?? 'GO'}</span>
           </div>
-          <span className="selo-ambiente" title="As notas não têm valor fiscal">HOMOLOGAÇÃO</span>
+          {estado.ambiente === 'producao'
+            ? <span className="selo-ambiente producao" title="As notas emitidas têm valor fiscal">PRODUÇÃO</span>
+            : <span className="selo-ambiente" title="As notas não têm valor fiscal">HOMOLOGAÇÃO</span>}
         </div>
         <Abas abas={abas} ativa={abaValida} onTrocar={(a) => { setFiltroNotas(null); trocarAba(a); }} />
         <div className="topo-direita">
@@ -312,6 +322,9 @@ function Principal({ estado, onEstado, onSair }) {
         </div>
       </header>
 
+      {estado.ambiente === 'producao' && (
+        <div className="faixa-producao">PRODUÇÃO — as notas emitidas aqui têm valor fiscal real.</div>
+      )}
       {estado.simulada && (
         <div className="faixa-simulada">SEFAZ SIMULADA — modo de teste da interface. Nada é enviado à SEFAZ e as “autorizações” são fictícias.</div>
       )}
@@ -381,8 +394,8 @@ export default function App() {
     return <div className="faixa-erro">Não foi possível falar com a API local: {erro}. Ela está rodando (npm run dev)?</div>;
   }
   if (!estado) return <div className="carregando-tela">Carregando…</div>;
-  if (!estado.configurado) return <TelaConfiguracao onConfigurado={entrou} />;
-  if (!estado.usuario) return <TelaLogin onEntrou={entrou} aviso={avisoLogin} />;
+  if (!estado.configurado) return <TelaConfiguracao onConfigurado={entrou} ambiente={estado.ambiente} />;
+  if (!estado.usuario) return <TelaLogin onEntrou={entrou} aviso={avisoLogin} ambiente={estado.ambiente} />;
   // A chave remonta tudo ao trocar de usuário ou produtor (nada de dados misturados na tela).
   return <Principal key={`${estado.usuario.id}-${estado.produtor?.id ?? 'nenhum'}`} estado={estado} onEstado={setEstado} onSair={sair} />;
 }

@@ -135,9 +135,9 @@ fn textos_limpos_e_escapados() {
 #[test]
 fn validacoes_de_entrada() {
     let erro = |d: &DadosNFe, c: &Config| gerar_xml_nfe(d, c).unwrap_err().to_string();
-    let mut producao = config();
-    producao.tp_amb = 1;
-    assert!(erro(&cenario(), &producao).contains("homologação"));
+    let mut invalido = config();
+    invalido.tp_amb = 3;
+    assert!(erro(&cenario(), &invalido).contains("tpAmb"));
 
     let mut d = cenario();
     d.itens.clear();
@@ -426,4 +426,15 @@ fn ibs_cbs_recusas() {
     // ...mas o produtor não contribuinte (sem valores) continua emitindo.
     com_classificacao(&mut d, "410014");
     assert!(gerar_xml_nfe(&d, &config()).is_ok());
+}
+
+#[test]
+fn producao_usa_tpamb_1_e_o_nome_real_do_destinatario() {
+    let mut c = config();
+    c.tp_amb = 1;
+    let g = gerar_xml_nfe(&cenario(), &c).unwrap();
+    assert!(g.xml.contains("<tpAmb>1</tpAmb>"));
+    assert!(!g.xml.contains(emissor_nfe::fiscal::nfe::NOME_DEST_HOMOLOGACAO), "em produção vai o nome real");
+    assert!(g.xml.contains("<xNome>COMPRADOR TESTE</xNome>"));
+    validar_assinado(&g.xml);
 }

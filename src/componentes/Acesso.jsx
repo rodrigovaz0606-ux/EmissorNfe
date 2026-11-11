@@ -13,7 +13,7 @@ function CampoAcesso({ rotulo, dica, ...props }) {
   );
 }
 
-function Moldura({ titulo, subtitulo, children }) {
+function Moldura({ titulo, subtitulo, children, ambiente }) {
   return (
     <div className="tela-acesso">
       <BotaoTema claro />
@@ -22,7 +22,7 @@ function Moldura({ titulo, subtitulo, children }) {
           <div className="logo">NF</div>
           <div>
             <h1>Emissor NF-e</h1>
-            <span>Modelo 55 · homologação</span>
+            <span>Modelo 55 · {ambiente === 'producao' ? <strong className="texto-producao">PRODUÇÃO</strong> : 'homologação'}</span>
           </div>
         </div>
         <h2>{titulo}</h2>
@@ -33,7 +33,7 @@ function Moldura({ titulo, subtitulo, children }) {
   );
 }
 
-export function TelaLogin({ onEntrou, aviso }) {
+export function TelaLogin({ onEntrou, aviso, ambiente }) {
   const [login, setLogin] = React.useState('');
   const [senha, setSenha] = React.useState('');
   const [erro, setErro] = React.useState('');
@@ -53,7 +53,7 @@ export function TelaLogin({ onEntrou, aviso }) {
   }
 
   return (
-    <Moldura titulo="Entrar" subtitulo="Use o usuário e a senha cadastrados pelo administrador.">
+    <Moldura ambiente={ambiente} titulo="Entrar" subtitulo="Use o usuário e a senha cadastrados pelo administrador.">
       {aviso && <div className="aviso-local falha">{aviso}</div>}
       <form onSubmit={entrar} className="form-acesso">
         <CampoAcesso rotulo="Usuário" value={login} onChange={(e) => setLogin(e.target.value)} autoComplete="username" autoFocus required />
@@ -65,7 +65,7 @@ export function TelaLogin({ onEntrou, aviso }) {
   );
 }
 
-export function TelaConfiguracao({ onConfigurado }) {
+export function TelaConfiguracao({ onConfigurado, ambiente }) {
   const [d, setD] = React.useState({ nome: '', login: '', senha: '', confirmacao: '' });
   const [erro, setErro] = React.useState('');
   const [enviando, setEnviando] = React.useState(false);
@@ -86,7 +86,7 @@ export function TelaConfiguracao({ onConfigurado }) {
   }
 
   return (
-    <Moldura titulo="Primeiro acesso" subtitulo="Crie o usuário administrador. Ele cadastra os demais usuários e vê todos os produtores.">
+    <Moldura ambiente={ambiente} titulo="Primeiro acesso" subtitulo="Crie o usuário administrador. Ele cadastra os demais usuários e vê todos os produtores.">
       <form onSubmit={criar} className="form-acesso">
         <CampoAcesso rotulo="Seu nome" value={d.nome} onChange={s('nome')} autoComplete="name" autoFocus required />
         <CampoAcesso rotulo="Usuário" value={d.login} onChange={s('login')} autoComplete="username" required dica="Letras, números, ponto, hífen ou sublinhado" />

@@ -70,7 +70,7 @@ function JanelaCertificado({ titulo, explicacao, textoBotao, onEnviar, onFechar 
 
 const EXPLICACAO_GUARDA =
   'O certificado é aberto aqui para conferir a senha, o CPF/CNPJ e a validade. Depois fica guardado cifrado neste computador ' +
-  '(AES-256) e só é usado para assinar e transmitir as notas deste produtor. Esta versão só opera em homologação.';
+  '(AES-256) e só é usado para assinar e transmitir as notas deste produtor.';
 
 export function Produtores({ usuario, produtorAtivo, onSelecionado, onAlterados, primeiraVez }) {
   const [lista, setLista] = React.useState(null);

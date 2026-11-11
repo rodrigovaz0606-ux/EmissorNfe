@@ -2,7 +2,11 @@
 
 NF-e modelo 55 emitida direto na SEFAZ. **Backend em Rust** (`backend/`), interface em React (`src/`).
 
-**Só opera em homologação.** O ambiente de produção está bloqueado em `backend/src/fiscal/config.rs`.
+**Homologação por padrão.** Para emitir notas com **valor fiscal**, coloque `NFE_AMBIENTE=producao` no `.env` e reinicie. Em produção:
+- o banco é outro (`data/producao.sqlite`): crie o administrador e cadastre os produtores de novo, e as notas de teste não se misturam com as reais;
+- a interface mostra o selo e a faixa vermelhos **PRODUÇÃO** e pede para digitar **EMITIR** antes de enviar cada nota;
+- a conexão confere o certificado do servidor da SEFAZ com as raízes da ICP-Brasil embutidas (`backend/src/fiscal/raizes-icp-brasil.pem`, do ITI) e recusa a conexão se não bater;
+- o comando `npm run enviar` (nota de exemplo) é bloqueado.
 
 ## Requisitos
 
@@ -22,7 +26,7 @@ Abra http://localhost:5175. A API (Rust) fica em http://localhost:3335 e só ace
 - Totais e impostos calculados enquanto você digita, com o mesmo arredondamento que gera o XML
 - Lista de pendências e avisos (por exemplo, CFOP incompatível com o destino da operação)
 - Busca de endereço pelo CEP (ViaCEP), que também preenche o código IBGE do município
-- **Validar**: gera, assina e confere o XML no XSD, sem enviar. **Emitir**: envia para a SEFAZ em homologação
+- **Validar**: gera, assina e confere o XML no XSD, sem enviar. **Emitir**: envia para a SEFAZ (no ambiente configurado)
 - **Produtos**: cadastro (código, descrição, NCM, CFOP, unidade, preço e tributação) salvo no SQLite; na nota, escolha o produto em "Produto cadastrado" para preencher o item, ou salve um item digitado com "Salvar no cadastro de produtos"
 - **Tema claro e escuro** (botão no topo e na tela de login). Sem escolha salva, segue o sistema. As animações são desligadas para quem ativa "reduzir movimento" no sistema
 - **Emitente pessoa física (CPF)**: usa a série 920 a 969 (NT 2018.001), escolhida sozinha pela tela; fora dela a SEFAZ rejeita com 407. Em Goiás o CPF precisa estar credenciado como emissor de NF-e na SEFAZ-GO
@@ -57,7 +61,7 @@ Para usar sem o Vite (interface já compilada servida pelo próprio backend): `n
    ```bash
    npm install
    npm run cert     # abre o .pfx e mostra titular/validade (não usa a rede)
-   npm run status   # consulta NFeStatusServico4 na SEFAZ-GO (homologação)
+   npm run status   # consulta NFeStatusServico4 na SEFAZ-GO (no ambiente do .env)
    npm test
    ```
 
@@ -90,11 +94,11 @@ Uma faixa amarela fica visível o tempo todo. As "autorizações" são fictícia
 | Comando | O que faz |
 |---|---|
 | `npm run cert` | Dados do certificado (sem rede) |
-| `npm run status` | Status da SEFAZ (homologação) |
+| `npm run status` | Status da SEFAZ (no ambiente do .env) |
 | `npm run consultar -- <chave>` | Situação de uma NF-e (somente leitura) |
 | `npm run gerar` | Gera, assina e valida o XML de exemplo em `saida/` |
 | `npm run validar -- <arquivo.xml>` | Valida um XML de NF-e no XSD |
-| `npm run enviar` | Envia o exemplo para autorização (homologação) |
+| `npm run enviar` | Envia o exemplo para autorização (só em homologação) |
 
 Os comandos chamam o binário `emissor-nfe` (`cargo run -- <comando>`); ele também pode ser usado direto depois de compilado.
 
@@ -131,7 +135,7 @@ Na migração para Rust, o validador XSD foi comparado com a libxml2 em 1.283 do
 - [x] Clientes, duplicar nota, filtros, exportação para o contador, painel e tipos de nota
 - [x] Controle de estoque por produto
 - [x] Autorização real (cStat 100) em homologação na SEFAZ-GO com emitente CPF (produtor rural), em 09/11/2026: série 920, IBS/CBS 410014
-- [ ] Liberar produção (decisão do usuário, com o contador e a autorização do produtor)
+- [x] Produção liberada por configuração (`NFE_AMBIENTE=producao`); status de produção da SEFAZ-GO conferido (107) com verificação do servidor
 - [x] Schemas atualizados para o PL_010g (validador lê o pacote; grupos de IBS/CBS ainda não são preenchidos pela tela)
 - [x] Grupo IBS/CBS por item e totais (NT 2025.002), com 3 classificações
 - [ ] Mais classificações de IBS/CBS (diferimento, crédito presumido etc.) conforme a necessidade; alíquotas de 2027 quando publicadas

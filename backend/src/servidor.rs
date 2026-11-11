@@ -237,7 +237,9 @@ async fn sem_cache(mut r: Response) -> Response {
 
 fn estado_json(c: &Contexto, s: Option<&SessaoAtual>) -> Result<Value> {
     let configurado = c.repo().contar_usuarios()? > 0;
-    let Some(s) = s else { return Ok(json!({ "configurado": configurado, "usuario": null, "produtor": null })) };
+    let Some(s) = s else {
+        return Ok(json!({ "configurado": configurado, "usuario": null, "produtor": null, "ambiente": c.config.nome_ambiente() }));
+    };
     let (produtor, aviso) = match contas::ativo_da_sessao(c, s) {
         Ok(Some(a)) => (contas::produtor_json(c, a.id)?, Value::Null),
         Ok(None) => (Value::Null, Value::Null),
@@ -245,7 +247,7 @@ fn estado_json(c: &Contexto, s: Option<&SessaoAtual>) -> Result<Value> {
     };
     Ok(json!({
         "configurado": configurado, "usuario": contas::usuario_json(&s.usuario), "produtor": produtor, "aviso": aviso,
-        "simulada": c.sefaz.simulada(), "uf": c.config.uf,
+        "simulada": c.sefaz.simulada(), "uf": c.config.uf, "ambiente": c.config.nome_ambiente(),
     }))
 }
 
@@ -372,7 +374,7 @@ async fn emissor(State(ctx): State<Ctx>, ComProdutor(a): ComProdutor) -> Result<
     let produtor = bloqueante(&ctx, move |c| contas::produtor_json(c, id)).await?;
     let info = &a.cert.info;
     Ok(json_ok(json!({
-        "uf": ctx.config.uf, "cUF": ctx.config.c_uf, "ambiente": "homologacao", "simulada": ctx.sefaz.simulada(),
+        "uf": ctx.config.uf, "cUF": ctx.config.c_uf, "ambiente": ctx.config.nome_ambiente(), "simulada": ctx.sefaz.simulada(),
         "certificado": info, "podeInutilizar": info.documento.as_ref().is_some_and(|d| d.len() == 14),
         "produtor": produtor,
     })))
@@ -631,21 +633,31 @@ fn env(nome: &str) -> Option<String> {
 /// Sobe o servidor com a configuração do ambiente (.env).
 /// Os certificados agora vêm do cadastro de produtores (não do CERT_PFX_PATH).
 pub fn iniciar() -> Result<bool> {
-    let config = carregar_config(env)?; // falha se não for homologação
+    let config = carregar_config(env)?;
     let simulada = env("NFE_SEFAZ_SIMULADA").as_deref() == Some("1");
     let banco = env("NFE_DB");
+    if simulada && config.producao() {
+        bail!("SEFAZ simulada não combina com NFE_AMBIENTE=producao. Use homologação para simular.");
+    }
     if simulada && banco.is_none() {
         bail!("Modo SEFAZ simulada exige um banco separado: defina NFE_DB (ex.: data/simulado.sqlite).");
     }
     let raiz = crate::raiz_do_projeto();
-    let arquivo = banco.clone().unwrap_or_else(|| raiz.join("data").join("emissor.sqlite").to_string_lossy().into_owned());
+    // Produção tem banco próprio: notas de teste (homologação) não se misturam com as reais
+    // na numeração, no painel nem na exportação para o contador.
+    let padrao = if config.producao() { "producao.sqlite" } else { "emissor.sqlite" };
+    let arquivo = banco.clone().unwrap_or_else(|| raiz.join("data").join(padrao).to_string_lossy().into_owned());
     let repo = Repositorio::abrir(&arquivo)?;
     let pasta_banco = std::path::Path::new(&arquivo).parent().map(PathBuf::from).unwrap_or_default();
     let cofre = Cofre::carregar(env("NFE_CHAVE_MESTRA"), &pasta_banco.join("chave-mestra.key"))?;
     let porta: u16 = env("PORT").and_then(|p| p.parse().ok()).unwrap_or(3335);
     let sem_usuarios = repo.contar_usuarios()? == 0;
 
-    println!("Emissor NF-e (HOMOLOGAÇÃO, {}) em http://localhost:{porta}", config.uf);
+    if config.producao() {
+        println!("*** PRODUÇÃO: as notas emitidas têm VALOR FISCAL. Banco: {arquivo} ***");
+    }
+    let nome_amb = if config.producao() { "PRODUÇÃO" } else { "HOMOLOGAÇÃO" };
+    println!("Emissor NF-e ({nome_amb}, {}) em http://localhost:{porta}", config.uf);
     if simulada {
         println!("*** SEFAZ SIMULADA — nada é enviado. Banco: {arquivo} ***");
     }

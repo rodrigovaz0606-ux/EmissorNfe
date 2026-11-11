@@ -159,7 +159,8 @@ fn eventos_validacoes_de_entrada() {
     assert!(erro(TipoEvento::Cce, DadosEvento { n_seq_evento: 21, ..cce("texto suficiente aqui") }, &c).contains("nSeqEvento"));
     let mut producao = Config::teste();
     producao.tp_amb = 1;
-    assert!(erro(TipoEvento::Cce, cce("texto suficiente aqui"), &producao).contains("homologação"));
+    // Produção liberada: o evento sai com tpAmb=1.
+    assert!(montar_evento(TipoEvento::Cce, &cce("texto suficiente aqui"), &producao).unwrap().contains("<tpAmb>1</tpAmb>"));
 }
 
 #[test]

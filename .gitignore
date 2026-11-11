@@ -15,3 +15,5 @@ backend/target/
 
 # pasta portátil gerada por npm run empacotar
 pacote/
+# raízes públicas da ICP-Brasil (ITI), embutidas para verificar o servidor da SEFAZ em produção
+!backend/src/fiscal/raizes-icp-brasil.pem

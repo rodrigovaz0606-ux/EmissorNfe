@@ -27,7 +27,7 @@ fn env(nome: &str) -> Option<String> {
 }
 
 fn configurar() -> Result<(Config, Certificado)> {
-    let config = carregar_config(env)?; // falha se não for homologação
+    let config = carregar_config(env)?;
     let cert = ler_certificado(config.cert_path.as_deref(), config.cert_senha.as_deref())?;
     Ok((config, cert))
 }
@@ -51,7 +51,7 @@ fn status() -> Result<bool> {
     if !i.vigente {
         eprintln!("ATENÇÃO: certificado fora da validade.");
     }
-    println!("Consultando NFeStatusServico4 — {}, homologação...", config.uf);
+    println!("Consultando NFeStatusServico4 — {}, {}...", config.uf, config.nome_ambiente());
     let r = servicos::consultar_status_servico(&config, &cert)?;
     println!("cStat {}: {}", r.cStat.unwrap_or_default(), r.xMotivo.unwrap_or_default());
     println!(
@@ -115,6 +115,9 @@ fn validar(arquivo: Option<String>) -> Result<bool> {
 
 fn enviar() -> Result<bool> {
     let (config, cert) = configurar()?;
+    if config.producao() {
+        bail!("O comando enviar manda a nota de EXEMPLO e não é permitido em produção (geraria uma nota fiscal real).");
+    }
     let (chave, v_nf, assinado) = exemplo_assinado(&config, &cert)?;
     if !verificar_assinatura(&assinado).valida {
         bail!("Assinatura não confere; envio cancelado.");

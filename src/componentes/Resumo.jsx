@@ -79,7 +79,7 @@ function Resultado({ r, onVerNotas, onNovaNota }) {
   );
 }
 
-export function Resumo({ totais, pendencias, avisos, ocupado, resultado, onValidar, onEmitir, onPrevia, onVerNotas, onNovaNota }) {
+export function Resumo({ producao, totais, pendencias, avisos, ocupado, resultado, onValidar, onEmitir, onPrevia, onVerNotas, onNovaNota }) {
   const completo = pendencias.length === 0;
   return (
     <aside className="resumo">
@@ -121,7 +121,10 @@ export function Resumo({ totais, pendencias, avisos, ocupado, resultado, onValid
         <button type="button" className="btn-texto previa" disabled={!completo || Boolean(ocupado)} onClick={onPrevia}>
           {ocupado === 'previa' ? 'Gerando prévia…' : 'Pré-visualizar DANFE'}
         </button>
-        <p className="nota-rodape">“Validar” gera, assina e confere o XML sem enviar. “Emitir” envia para a SEFAZ em homologação.</p>
+        <p className="nota-rodape">
+          “Validar” gera, assina e confere o XML sem enviar. “Emitir” envia para a SEFAZ
+          {producao ? <strong> em PRODUÇÃO: a nota terá valor fiscal.</strong> : ' em homologação.'}
+        </p>
       </div>
 
       {resultado && <Resultado r={resultado} onVerNotas={onVerNotas} onNovaNota={onNovaNota} />}

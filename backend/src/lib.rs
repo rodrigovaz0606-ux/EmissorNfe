@@ -1,4 +1,4 @@
-//! Emissor de NF-e modelo 55 direto na SEFAZ (homologação).
+//! Emissor de NF-e modelo 55 direto na SEFAZ (homologação por padrão; produção com NFE_AMBIENTE=producao).
 pub mod auth;
 pub mod clientes;
 pub mod cofre;
