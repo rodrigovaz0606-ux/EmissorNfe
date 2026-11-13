@@ -18,6 +18,7 @@ use crate::danfe::gerar_danfe;
 use crate::db::{FiltroNotas, Repositorio};
 use crate::emissao::{self, Ativo, Contexto, ErroNegocio, SefazReal};
 use crate::estoque;
+use crate::pagamento;
 use crate::fiscal::config::carregar_config;
 use crate::fiscal::soap::ErroRede;
 use crate::produtos;
@@ -175,7 +176,21 @@ impl FromRequestParts<Ctx> for ComProdutor {
     type Rejection = ErroApi;
     async fn from_request_parts(parts: &mut Parts, ctx: &Ctx) -> Result<Self, ErroApi> {
         let Logado(s) = Logado::from_request_parts(parts, ctx).await?;
-        match bloqueante(ctx, move |c| contas::ativo_da_sessao(c, &s)).await? {
+        let ativo = bloqueante(ctx, move |c| {
+            let ativo = contas::ativo_da_sessao(c, &s)?;
+            match &ativo {
+                Some(a) if pagamento::bloqueado(c, a.id)? => Ok(Err(())),
+                _ => Ok(Ok(ativo)),
+            }
+        })
+        .await?;
+        let Ok(ativo) = ativo else {
+            return Err(ErroApi(
+                StatusCode::PAYMENT_REQUIRED,
+                "Mensalidade em atraso: a emissão deste produtor está bloqueada até o pagamento. Abra a aba Mensalidade.".into(),
+            ));
+        };
+        match ativo {
             Some(a) => Ok(ComProdutor(a)),
             None => Err(ErroApi(StatusCode::CONFLICT, "Selecione um produtor para continuar.".into())),
         }
@@ -238,15 +253,20 @@ async fn sem_cache(mut r: Response) -> Response {
 fn estado_json(c: &Contexto, s: Option<&SessaoAtual>) -> Result<Value> {
     let configurado = c.repo().contar_usuarios()? > 0;
     let Some(s) = s else {
-        return Ok(json!({ "configurado": configurado, "usuario": null, "produtor": null, "ambiente": c.config.nome_ambiente() }));
+        return Ok(json!({ "configurado": configurado, "usuario": null, "produtor": null, "ambiente": c.config.nome_ambiente(), "mensalidade_ativa": c.pagamento.is_some() }));
     };
     let (produtor, aviso) = match contas::ativo_da_sessao(c, s) {
         Ok(Some(a)) => (contas::produtor_json(c, a.id)?, Value::Null),
         Ok(None) => (Value::Null, Value::Null),
         Err(e) => (Value::Null, json!(e.to_string())),
     };
+    let mensalidade = match s.produtor_id {
+        Some(id) if !produtor.is_null() => pagamento::resumo(c, id)?,
+        _ => Value::Null,
+    };
     Ok(json!({
         "configurado": configurado, "usuario": contas::usuario_json(&s.usuario), "produtor": produtor, "aviso": aviso,
+        "mensalidade": mensalidade, "mensalidade_ativa": c.pagamento.is_some(),
         "simulada": c.sefaz.simulada(), "uf": c.config.uf, "ambiente": c.config.nome_ambiente(),
     }))
 }
@@ -575,6 +595,41 @@ async fn excluir_cliente(State(ctx): State<Ctx>, ComProdutor(a): ComProdutor, Pa
     }
 }
 
+// ---------- mensalidade ----------
+
+async fn mensalidade(State(ctx): State<Ctx>, Logado(s): Logado) -> Result<Response, ErroApi> {
+    Ok(json_ok(bloqueante(&ctx, move |c| pagamento::verificar(c, pagamento::produtor_da_sessao(c, &s)?)).await?))
+}
+
+async fn mensalidade_pix(State(ctx): State<Ctx>, Logado(s): Logado) -> Result<Response, ErroApi> {
+    Ok(json_ok(bloqueante(&ctx, move |c| pagamento::gerar_pix(c, pagamento::produtor_da_sessao(c, &s)?)).await?))
+}
+
+async fn definir_vencimento(State(ctx): State<Ctx>, Admin(_): Admin, Path(id): Path<String>, corpo: Bytes) -> Result<Response, ErroApi> {
+    let (id, dados) = (id_de(&id), corpo_json(&corpo)?);
+    let texto = campo_texto(&dados, "vencimento").unwrap_or_default();
+    Ok(json_ok(bloqueante(&ctx, move |c| pagamento::definir_vencimento(c, id, &texto)).await?))
+}
+
+/// Confere a cada minuto os Pix em aberto, para o pagamento ser reconhecido com a tela fechada.
+pub fn iniciar_verificacao_pagamentos(ctx: Ctx) {
+    if ctx.pagamento.is_none() {
+        return;
+    }
+    tokio::spawn(async move {
+        let mut intervalo = tokio::time::interval(std::time::Duration::from_secs(60));
+        loop {
+            intervalo.tick().await;
+            let c = ctx.clone();
+            match tokio::task::spawn_blocking(move || pagamento::verificar_pendentes(&c)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => eprintln!("[pagamento] falha ao conferir os Pix em aberto: {e:#}"),
+                Err(e) => eprintln!("[pagamento] falha ao conferir os Pix em aberto: {e}"),
+            }
+        }
+    });
+}
+
 /// Monta a aplicação. `dist`: pasta da interface compilada (opcional).
 pub fn criar_app(ctx: Ctx, dist: Option<PathBuf>) -> Router {
     let api = Router::new()
@@ -593,6 +648,10 @@ pub fn criar_app(ctx: Ctx, dist: Option<PathBuf>) -> Router {
         // administração
         .route("/admin/usuarios", get(usuarios).post(criar_usuario))
         .route("/admin/usuarios/{id}", put(alterar_usuario))
+        .route("/admin/produtores/{id}/vencimento", put(definir_vencimento))
+        // mensalidade (fica acessível com o produtor bloqueado, para poder pagar)
+        .route("/mensalidade", get(mensalidade))
+        .route("/mensalidade/pix", post(mensalidade_pix))
         // emissão
         .route("/emissor", get(emissor))
         .route("/sefaz/status", get(status))
@@ -665,11 +724,17 @@ pub fn iniciar() -> Result<bool> {
         println!("Primeiro acesso: abra o endereço acima para criar o usuário administrador.");
     }
     let sefaz: Box<dyn emissao::Sefaz> = if simulada { Box::new(SefazSimulada) } else { Box::new(SefazReal) };
-    let ctx = Arc::new(Contexto::novo(config, repo, sefaz, cofre));
-    let app = criar_app(ctx, Some(raiz.join("dist")));
+    let mut ctx = Contexto::novo(config, repo, sefaz, cofre);
+    ctx.pagamento = pagamento::carregar(env)?;
+    if let Some(p) = &ctx.pagamento {
+        println!("Mensalidade por Pix ligada (R$ {},{:02} por produtor).", p.valor_centavos / 100, p.valor_centavos % 100);
+    }
+    let ctx = Arc::new(ctx);
+    let app = criar_app(ctx.clone(), Some(raiz.join("dist")));
     let _ = auth::hash_ficticio(); // prepara já (evita a primeira tentativa de login mais lenta)
 
     tokio::runtime::Runtime::new()?.block_on(async move {
+        iniciar_verificacao_pagamentos(ctx);
         let ouvinte = tokio::net::TcpListener::bind(("127.0.0.1", porta)).await?;
         axum::serve(ouvinte, app)
             .with_graceful_shutdown(async {

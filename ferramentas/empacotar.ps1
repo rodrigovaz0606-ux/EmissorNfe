@@ -29,7 +29,10 @@ Copy-Item (Join-Path $PSScriptRoot 'LEIA-ME.txt') $destino
 # (eles entram pela tela de Produtores).
 Set-Content -Encoding ascii (Join-Path $destino '.env') @(
   'NFE_UF=GO',
-  'NFE_AMBIENTE=producao'
+  'NFE_AMBIENTE=producao',
+  '# Mensalidade por Pix (GatewayRR): desligada. Ver README, secao Mensalidade.',
+  'API_PAGAMENTO=false',
+  'URL_API_PAGAMENTO='
 )
 
 Write-Host '4/4 Compactando...'

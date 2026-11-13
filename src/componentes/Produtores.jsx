@@ -13,8 +13,10 @@ const diasAte = (iso) => (iso ? Math.floor((new Date(iso) - Date.now()) / 864000
 const tamanhoArquivo = (bytes) => `${(bytes / 1024).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} KB`;
 
 // Envio do certificado A1 (.pfx/.p12) com a senha. Usado para adicionar e para renovar.
-function JanelaCertificado({ titulo, explicacao, textoBotao, onEnviar, onFechar }) {
+function JanelaCertificado({ titulo, explicacao, textoBotao, onEnviar, onFechar, pedirVencimento }) {
   const [arquivo, setArquivo] = React.useState(null);
+  const [dia, setDia] = React.useState('');
+  const idDia = React.useId();
   const [senha, setSenha] = React.useState('');
   const [erro, setErro] = React.useState('');
   const [enviando, setEnviando] = React.useState(false);
@@ -26,7 +28,7 @@ function JanelaCertificado({ titulo, explicacao, textoBotao, onEnviar, onFechar 
     setEnviando(true);
     setErro('');
     try {
-      await onEnviar(await arquivoEmBase64(arquivo), senha);
+      await onEnviar(await arquivoEmBase64(arquivo), senha, pedirVencimento ? { dia_vencimento: Number(dia) } : {});
     } catch (e2) {
       setErro(e2.message);
       setEnviando(false);
@@ -59,10 +61,19 @@ function JanelaCertificado({ titulo, explicacao, textoBotao, onEnviar, onFechar 
           <label className="rotulo" htmlFor={idSenha}>Senha do certificado</label>
           <input id={idSenha} type="password" value={senha} onChange={(e) => setSenha(e.target.value)} autoComplete="off" />
         </div>
+        {pedirVencimento && (
+          <div className="campo">
+            <label className="rotulo" htmlFor={idDia}>Dia do vencimento da mensalidade</label>
+            <select id={idDia} value={dia} onChange={(e) => setDia(e.target.value)} required disabled={enviando}>
+              <option value="">Escolha o dia</option>
+              {Array.from({ length: 28 }, (_, i) => <option key={i + 1} value={i + 1}>Todo dia {i + 1}</option>)}
+            </select>
+          </div>
+        )}
         {erro && <div className="faixa-erro-local" role="alert">{erro}</div>}
         <div className="janela-botoes">
           <button type="button" className="btn-secundario" onClick={onFechar} disabled={enviando}>Cancelar</button>
-          <button type="submit" className="btn-primario" disabled={!arquivo || enviando}>{enviando ? 'Conferindo certificado…' : textoBotao}</button>
+          <button type="submit" className="btn-primario" disabled={!arquivo || enviando || (pedirVencimento && !dia)}>{enviando ? 'Conferindo certificado…' : textoBotao}</button>
         </div>
       </form>
     </Janela>
@@ -73,7 +84,29 @@ const EXPLICACAO_GUARDA =
   'O certificado é aberto aqui para conferir a senha, o CPF/CNPJ e a validade. Depois fica guardado cifrado neste computador ' +
   '(AES-256) e só é usado para assinar e transmitir as notas deste produtor.';
 
-export function Produtores({ usuario, produtorAtivo, onSelecionado, onAlterados, primeiraVez }) {
+// Administrador: muda o próximo vencimento da mensalidade (ex.: pagamento combinado por fora).
+function VencimentoAdmin({ produtor, onAlterado }) {
+  const [valor, setValor] = React.useState(produtor.pagamento_vencimento ?? '');
+  const [msg, setMsg] = React.useState(null);
+  async function salvar() {
+    try {
+      await api.definirVencimento(produtor.id, valor);
+      setMsg({ ok: true, texto: 'Vencimento salvo.' });
+      onAlterado?.();
+    } catch (e) {
+      setMsg({ ok: false, texto: e.message });
+    }
+  }
+  return (
+    <div className="vencimento-admin">
+      <input type="date" value={valor} onChange={(e) => setValor(e.target.value)} aria-label={`Vencimento de ${produtor.titular}`} />
+      <button type="button" className="btn-texto" onClick={salvar} disabled={!valor || valor === produtor.pagamento_vencimento}>Salvar vencimento</button>
+      {msg && <small className={msg.ok ? 'ok' : 'vence'}>{msg.texto}</small>}
+    </div>
+  );
+}
+
+export function Produtores({ usuario, produtorAtivo, onSelecionado, onAlterados, primeiraVez, mensalidadeAtiva }) {
   const [lista, setLista] = React.useState(null);
   const [erro, setErro] = React.useState('');
   const [aviso, setAviso] = React.useState(null);
@@ -154,7 +187,9 @@ export function Produtores({ usuario, produtorAtivo, onSelecionado, onAlterados,
                     <div><dt>Notas</dt><dd>{p.notas}</dd></div>
                     {usuario?.admin && <div><dt>Cadastrado por</dt><dd>{p.dono_nome ?? '—'}</dd></div>}
                     {p.emitente?.IE && <div><dt>Inscrição estadual</dt><dd>{p.emitente.IE}</dd></div>}
+                    {mensalidadeAtiva && <div><dt>Mensalidade vence em</dt><dd>{p.pagamento_vencimento ? p.pagamento_vencimento.split('-').reverse().join('/') : 'Sem vencimento'}</dd></div>}
                   </dl>
+                  {mensalidadeAtiva && usuario?.admin && <VencimentoAdmin produtor={p} onAlterado={() => { carregar(); onAlterados?.(); }} />}
                   <div className="cartao-produtor-acoes">
                     {!ativo && (
                       <button type="button" className="btn-primario pequeno" onClick={() => selecionar(p)} disabled={trocando !== null}>
@@ -175,9 +210,10 @@ export function Produtores({ usuario, produtorAtivo, onSelecionado, onAlterados,
         <JanelaCertificado
           titulo="Adicionar produtor" textoBotao="Adicionar e usar"
           explicacao={<>O produtor é identificado pelo CPF/CNPJ do certificado. {EXPLICACAO_GUARDA}</>}
+          pedirVencimento={mensalidadeAtiva}
           onFechar={() => setJanela(null)}
-          onEnviar={async (pfx, senha) => {
-            const p = await api.adicionarProdutor(pfx, senha);
+          onEnviar={async (pfx, senha, extra) => {
+            const p = await api.adicionarProdutor(pfx, senha, extra);
             setJanela(null);
             await carregar();
             onSelecionado(await api.selecionarProdutor(p.id));

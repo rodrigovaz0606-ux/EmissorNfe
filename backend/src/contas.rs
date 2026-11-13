@@ -229,6 +229,15 @@ fn resumo(cert: &Certificado, id: i64) -> Value {
 /// Cadastra um produtor a partir do certificado. Se o mesmo documento tinha sido removido,
 /// ele volta (com o histórico de notas) com o certificado novo.
 pub fn adicionar_produtor(ctx: &Contexto, s: &SessaoAtual, dados: &Value) -> Result<Value> {
+    // Com a mensalidade ligada, o cadastro escolhe o dia do vencimento (1 a 28).
+    let vencimento = match &ctx.pagamento {
+        Some(_) => {
+            let dia = dados.get("dia_vencimento").and_then(Value::as_u64).unwrap_or(0);
+            let dia = u32::try_from(dia).unwrap_or(0);
+            Some(crate::pagamento::primeiro_vencimento(dia, crate::pagamento::hoje())?)
+        }
+        None => None,
+    };
     let (pfx, senha, cert) = ler_envio(dados)?;
     let doc = cert.info.documento.clone().unwrap_or_default();
     let (pfx_c, senha_c) = cifrar_certificado(ctx, &pfx, &senha)?;
@@ -252,11 +261,20 @@ pub fn adicionar_produtor(ctx: &Contexto, s: &SessaoAtual, dados: &Value) -> Res
             }
             Some(p) => {
                 repo.atualizar_certificado(p.id, &c, s.usuario.id)?;
+                // Produtor removido e cadastrado de novo mantém o vencimento que tinha.
+                if let Some(v) = vencimento
+                    && repo.vencimento_produtor(p.id)?.is_none()
+                {
+                    repo.definir_vencimento(p.id, &v.to_string())?;
+                }
                 p.id
             }
             None => {
                 let id = repo.inserir_produtor(&c, s.usuario.id)?;
                 repo.adotar_dados_antigos(id, &doc)?;
+                if let Some(v) = vencimento {
+                    repo.definir_vencimento(id, &v.to_string())?;
+                }
                 id
             }
         }

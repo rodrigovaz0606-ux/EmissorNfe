@@ -76,6 +76,8 @@ pub struct Contexto {
     /// Certificados já abertos, por produtor (evita decifrar e ler o .pfx a cada requisição).
     pub certificados: Mutex<HashMap<i64, Arc<Certificado>>>,
     pub tentativas: Tentativas,
+    /// Mensalidade por Pix (`None` = desligada, API_PAGAMENTO=false).
+    pub pagamento: Option<crate::pagamento::Pagamento>,
 }
 
 impl Contexto {
@@ -87,6 +89,7 @@ impl Contexto {
             cofre,
             certificados: Mutex::new(HashMap::new()),
             tentativas: Tentativas::default(),
+            pagamento: None,
         }
     }
 

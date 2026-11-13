@@ -163,6 +163,34 @@ CREATE INDEX ix_estoque_produto ON estoque_movimentos (produto_id, id);
 CREATE INDEX ix_estoque_nota ON estoque_movimentos (nota_id);
 ";
 
+/// Migração 4: mensalidade dos produtores, paga por Pix pelo GatewayRR (só usada com
+/// API_PAGAMENTO=true). `instalacao` diferencia os pedidos de pagamento deste banco dos de
+/// outro (homologação e produção usam bancos separados e o mesmo gateway).
+const MIGRACAO_4: &str = "
+ALTER TABLE produtores ADD COLUMN pagamento_vencimento TEXT;  -- próximo vencimento não pago (AAAA-MM-DD)
+CREATE TABLE parametros (
+  nome          TEXT PRIMARY KEY,
+  valor         TEXT NOT NULL
+);
+INSERT INTO parametros (nome, valor) VALUES ('instalacao', lower(hex(randomblob(6))));
+CREATE TABLE cobrancas (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  produtor_id   INTEGER NOT NULL REFERENCES produtores(id),
+  vencimento    TEXT NOT NULL,          -- mensalidade que esta cobrança paga
+  valor_centavos INTEGER NOT NULL,
+  tentativa     INTEGER NOT NULL,
+  chave         TEXT NOT NULL UNIQUE,   -- chave de idempotência enviada ao gateway
+  situacao      TEXT NOT NULL,          -- criando | pendente | paga | expirada | falhou
+  pagamento_id  TEXT,                   -- id do pagamento no gateway
+  pix_copia_cola TEXT,
+  expira_em     INTEGER,                -- Unix (segundos)
+  criada_em     TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+  paga_em       TEXT,
+  UNIQUE (produtor_id, vencimento, tentativa)
+);
+CREATE INDEX ix_cobrancas_situacao ON cobrancas (situacao);
+";
+
 /// Quantidades de estoque são guardadas como inteiros: qCom tem até 4 casas decimais.
 pub const ESCALA_ESTOQUE: f64 = 10_000.0;
 
@@ -250,6 +278,39 @@ pub struct Usuario {
     pub senha_hash: String,
     pub admin: bool,
     pub ativo: bool,
+}
+
+/// Cobrança de mensalidade (ver `pagamento.rs`).
+#[derive(Debug, Clone)]
+pub struct Cobranca {
+    pub id: i64,
+    pub produtor_id: i64,
+    pub vencimento: String,
+    pub valor_centavos: i64,
+    pub tentativa: i64,
+    pub chave: String,
+    pub situacao: String,
+    pub pagamento_id: Option<String>,
+    pub pix_copia_cola: Option<String>,
+    pub expira_em: Option<i64>,
+}
+
+const CAMPOS_COBRANCA: &str =
+    "id, produtor_id, vencimento, valor_centavos, tentativa, chave, situacao, pagamento_id, pix_copia_cola, expira_em";
+
+fn cobranca_de(r: &Row) -> rusqlite::Result<Cobranca> {
+    Ok(Cobranca {
+        id: r.get(0)?,
+        produtor_id: r.get(1)?,
+        vencimento: r.get(2)?,
+        valor_centavos: r.get(3)?,
+        tentativa: r.get(4)?,
+        chave: r.get(5)?,
+        situacao: r.get(6)?,
+        pagamento_id: r.get(7)?,
+        pix_copia_cola: r.get(8)?,
+        expira_em: r.get(9)?,
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -498,6 +559,9 @@ impl Repositorio {
         }
         if versao < 3 {
             db.execute_batch(&format!("BEGIN; {MIGRACAO_3} PRAGMA user_version = 3; COMMIT;"))?;
+        }
+        if versao < 4 {
+            db.execute_batch(&format!("BEGIN; {MIGRACAO_4} PRAGMA user_version = 4; COMMIT;"))?;
         }
         Ok(Repositorio { db })
     }
@@ -1090,7 +1154,7 @@ impl Repositorio {
     pub fn listar_produtores(&self, dono: Option<i64>) -> Result<Vec<Value>> {
         let mut v = self.linhas(
             "SELECT p.id, p.documento, p.titular, p.tipo, p.emissor_cert, p.valido_ate, p.dono_id, u.nome AS dono_nome,
-                    p.emitente_json, p.criado_em,
+                    p.emitente_json, p.criado_em, p.pagamento_vencimento,
                     (SELECT COUNT(*) FROM notas n WHERE n.produtor_id = p.id) AS notas
              FROM produtores p LEFT JOIN usuarios u ON u.id = p.dono_id
              WHERE p.ativo = 1 AND (?1 IS NULL OR p.dono_id = ?1)
@@ -1158,5 +1222,115 @@ impl Repositorio {
             self.db.execute("UPDATE inutilizacoes SET produtor_id = ? WHERE produtor_id IS NULL", [produtor])?;
         }
         Ok(())
+    }
+}
+
+// ---------- mensalidade (pagamento.rs) ----------
+
+impl Repositorio {
+    pub fn instalacao(&self) -> Result<String> {
+        Ok(self.db.query_row("SELECT valor FROM parametros WHERE nome = 'instalacao'", [], |r| r.get(0))?)
+    }
+
+    pub fn vencimento_produtor(&self, produtor_id: i64) -> Result<Option<String>> {
+        Ok(self
+            .db
+            .query_row("SELECT pagamento_vencimento FROM produtores WHERE id = ?", [produtor_id], |r| r.get(0))
+            .optional()?
+            .flatten())
+    }
+
+    pub fn definir_vencimento(&self, produtor_id: i64, vencimento: &str) -> Result<()> {
+        self.db.execute("UPDATE produtores SET pagamento_vencimento = ? WHERE id = ?", params![vencimento, produtor_id])?;
+        Ok(())
+    }
+
+    /// A tentativa mais recente ainda em aberto (criando ou pendente) da mensalidade.
+    pub fn cobranca_aberta(&self, produtor_id: i64, vencimento: &str) -> Result<Option<Cobranca>> {
+        Ok(self
+            .db
+            .query_row(
+                &format!(
+                    "SELECT {CAMPOS_COBRANCA} FROM cobrancas
+                     WHERE produtor_id = ? AND vencimento = ? AND situacao IN ('criando', 'pendente')
+                     ORDER BY tentativa DESC LIMIT 1"
+                ),
+                params![produtor_id, vencimento],
+                cobranca_de,
+            )
+            .optional()?)
+    }
+
+    pub fn proxima_tentativa(&self, produtor_id: i64, vencimento: &str) -> Result<i64> {
+        Ok(self.db.query_row(
+            "SELECT COALESCE(MAX(tentativa), 0) + 1 FROM cobrancas WHERE produtor_id = ? AND vencimento = ?",
+            params![produtor_id, vencimento],
+            |r| r.get(0),
+        )?)
+    }
+
+    pub fn nova_cobranca(&self, produtor_id: i64, vencimento: &str, valor_centavos: i64, tentativa: i64, chave: &str) -> Result<Cobranca> {
+        self.db.execute(
+            "INSERT INTO cobrancas (produtor_id, vencimento, valor_centavos, tentativa, chave, situacao)
+             VALUES (?, ?, ?, ?, ?, 'criando')",
+            params![produtor_id, vencimento, valor_centavos, tentativa, chave],
+        )?;
+        let id = self.db.last_insert_rowid();
+        Ok(self.db.query_row(&format!("SELECT {CAMPOS_COBRANCA} FROM cobrancas WHERE id = ?"), [id], cobranca_de)?)
+    }
+
+    /// Guarda o pagamento criado no gateway. Não mexe em cobrança já paga.
+    pub fn cobranca_pendente(&self, id: i64, pagamento_id: &str, copia_cola: &str, expira_em: i64) -> Result<()> {
+        self.db.execute(
+            "UPDATE cobrancas SET situacao = 'pendente', pagamento_id = ?, pix_copia_cola = ?, expira_em = ?
+             WHERE id = ? AND situacao IN ('criando', 'pendente')",
+            params![pagamento_id, copia_cola, expira_em, id],
+        )?;
+        Ok(())
+    }
+
+    /// Encerra uma tentativa sem pagamento (expirada ou falhou). Não mexe em cobrança já paga.
+    pub fn encerrar_cobranca(&self, id: i64, situacao: &str) -> Result<()> {
+        self.db.execute(
+            "UPDATE cobrancas SET situacao = ? WHERE id = ? AND situacao IN ('criando', 'pendente')",
+            params![situacao, id],
+        )?;
+        Ok(())
+    }
+
+    /// Marca a cobrança como paga e, se ela pagava o vencimento atual do produtor, avança
+    /// para o próximo. As duas mudanças são atômicas, e repetir não paga duas vezes.
+    pub fn confirmar_cobranca(&self, c: &Cobranca, proximo_vencimento: &str) -> Result<bool> {
+        let tx = self.db.unchecked_transaction()?;
+        let mudou = tx.execute(
+            "UPDATE cobrancas SET situacao = 'paga', paga_em = datetime('now', 'localtime') WHERE id = ? AND situacao <> 'paga'",
+            [c.id],
+        )?;
+        if mudou == 1 {
+            tx.execute(
+                "UPDATE produtores SET pagamento_vencimento = ? WHERE id = ? AND pagamento_vencimento = ?",
+                params![proximo_vencimento, c.produtor_id, c.vencimento],
+            )?;
+        }
+        tx.commit()?;
+        Ok(mudou == 1)
+    }
+
+    /// Cobranças com pagamento criado no gateway e ainda sem resposta final.
+    pub fn cobrancas_pendentes(&self, expiradas_desde: i64) -> Result<Vec<Cobranca>> {
+        let mut st = self.db.prepare(&format!(
+            "SELECT {CAMPOS_COBRANCA} FROM cobrancas
+             WHERE situacao = 'pendente' AND pagamento_id IS NOT NULL AND expira_em >= ? ORDER BY id"
+        ))?;
+        let v = st.query_map([expiradas_desde], cobranca_de)?.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(v)
+    }
+
+    pub fn cobrancas_do_produtor(&self, produtor_id: i64) -> Result<Vec<Value>> {
+        self.linhas(
+            "SELECT vencimento, valor_centavos, situacao, criada_em, paga_em FROM cobrancas
+             WHERE produtor_id = ? AND situacao = 'paga' ORDER BY vencimento DESC LIMIT 24",
+            [produtor_id],
+        )
     }
 }

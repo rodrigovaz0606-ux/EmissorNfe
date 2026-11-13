@@ -18,6 +18,7 @@
     "validar": "cargo run -q --manifest-path backend/Cargo.toml -- validar",
     "enviar": "cargo run -q --manifest-path backend/Cargo.toml -- enviar",
     "consultar": "cargo run -q --manifest-path backend/Cargo.toml -- consultar",
+    "pagamento-chave": "cargo run -q --manifest-path backend/Cargo.toml -- pagamento-chave",
     "empacotar": "powershell -NoProfile -ExecutionPolicy Bypass -File ferramentas/empacotar.ps1"
   },
   "dependencies": {

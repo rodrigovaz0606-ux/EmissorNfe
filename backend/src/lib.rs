@@ -9,6 +9,7 @@ pub mod emissao;
 pub mod estoque;
 pub mod exemplo;
 pub mod fiscal;
+pub mod pagamento;
 pub mod produtos;
 pub mod relatorios;
 pub mod servidor;

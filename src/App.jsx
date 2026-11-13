@@ -13,6 +13,7 @@ import { Clientes } from './componentes/Clientes.jsx';
 import { Painel } from './componentes/Painel.jsx';
 import { Produtores, formatarDoc } from './componentes/Produtores.jsx';
 import { Admin, JanelaSenha } from './componentes/Admin.jsx';
+import { Mensalidade, FaixaMensalidade } from './componentes/Mensalidade.jsx';
 import { TelaLogin, TelaConfiguracao } from './componentes/Acesso.jsx';
 import { Abas, BotaoTema } from './componentes/Movimento.jsx';
 import { Confirmacoes, confirmar, avisar } from './componentes/Confirmacao.jsx';
@@ -253,14 +254,17 @@ function Emissao({ produtor, emissor, onVerNotas, produtos, carregarProdutos, cl
 }
 
 // Área logada. `produtor` = produtor ativo (ou null: só dá para escolher/cadastrar produtor).
-function Principal({ estado, onEstado, onSair }) {
-  const { usuario, produtor } = estado;
+function Principal({ estado, onEstado, onSair, onRecarregar }) {
+  const { usuario, produtor, mensalidade } = estado;
+  // Bloqueado por atraso: só a mensalidade, a troca de produtor e a administração.
+  const bloqueado = mensalidade?.situacao === 'bloqueado';
   const abas = [
-    ...(produtor ? ABAS_EMISSAO : []),
+    ...(produtor && !bloqueado ? ABAS_EMISSAO : []),
+    ...(produtor && mensalidade ? [['mensalidade', 'Mensalidade']] : []),
     ['produtores', 'Produtores'],
     ...(usuario.admin ? [['admin', 'Administração']] : []),
   ];
-  const [aba, setAba] = React.useState(() => abas.find(([a]) => `#${a}` === window.location.hash)?.[0] ?? (produtor ? 'emitir' : 'produtores'));
+  const [aba, setAba] = React.useState(() => abas.find(([a]) => `#${a}` === window.location.hash)?.[0] ?? (bloqueado ? 'mensalidade' : produtor ? 'emitir' : 'produtores'));
   const [emissor, setEmissor] = React.useState(null);
   const [erroEmissor, setErroEmissor] = React.useState('');
   const [produtos, setProdutos] = React.useState(null);
@@ -275,15 +279,15 @@ function Principal({ estado, onEstado, onSair }) {
   };
 
   React.useEffect(() => {
-    if (!produtor) return;
+    if (!produtor || bloqueado) return;
     api.emissor().then(setEmissor).catch((e) => setErroEmissor(e.message));
-  }, [produtor]);
+  }, [produtor, bloqueado]);
 
   const carregarProdutos = React.useCallback(() => api.produtos().then(setProdutos).catch(() => setProdutos(null)), []);
-  React.useEffect(() => { if (produtor) carregarProdutos(); }, [produtor, carregarProdutos]);
+  React.useEffect(() => { if (produtor && !bloqueado) carregarProdutos(); }, [produtor, bloqueado, carregarProdutos]);
 
   const carregarClientes = React.useCallback(() => api.clientes().then(setClientes).catch(() => setClientes(null)), []);
-  React.useEffect(() => { if (produtor) carregarClientes(); }, [produtor, carregarClientes]);
+  React.useEffect(() => { if (produtor && !bloqueado) carregarClientes(); }, [produtor, bloqueado, carregarClientes]);
 
   // Abre Notas emitidas já filtrada (atalhos do painel).
   const verNotas = (filtro = null) => { setFiltroNotas(filtro); trocarAba('notas'); };
@@ -334,6 +338,7 @@ function Principal({ estado, onEstado, onSair }) {
         <div className="faixa-simulada">SEFAZ SIMULADA — modo de teste da interface. Nada é enviado à SEFAZ e as “autorizações” são fictícias.</div>
       )}
       {estado.aviso && <div className="faixa-erro">{estado.aviso}</div>}
+      {abaValida !== 'mensalidade' && <FaixaMensalidade mensalidade={mensalidade} onAbrir={() => trocarAba('mensalidade')} />}
       {erroEmissor && <div className="faixa-erro">Não foi possível carregar o produtor: {erroEmissor}</div>}
 
       {/* A chave recria o bloco a cada aba, e isso dispara a animação de entrada. */}
@@ -350,12 +355,13 @@ function Principal({ estado, onEstado, onSair }) {
       {abaValida === 'produtos' && <Produtos onAlterados={carregarProdutos} />}
       {abaValida === 'produtores' && (
         <Produtores
-          usuario={usuario} produtorAtivo={produtor?.id} primeiraVez={!produtor}
+          usuario={usuario} produtorAtivo={produtor?.id} primeiraVez={!produtor} mensalidadeAtiva={estado.mensalidade_ativa}
           onSelecionado={aoSelecionarProdutor}
           onAlterados={(removido) => { if (removido && removido === produtor?.id) onEstado({ ...estado, produtor: null }); }}
         />
       )}
       {abaValida === 'admin' && <Admin usuario={usuario} />}
+      {abaValida === 'mensalidade' && <Mensalidade onPago={onRecarregar} />}
       </div>
       {trocandoSenha && <JanelaSenha onFechar={() => setTrocandoSenha(false)} />}
     </div>
@@ -397,13 +403,13 @@ export default function App() {
 
   return (
     <>
-      <Telas estado={estado} erro={erro} avisoLogin={avisoLogin} entrou={entrou} sair={sair} setEstado={setEstado} />
+      <Telas estado={estado} erro={erro} avisoLogin={avisoLogin} entrou={entrou} sair={sair} setEstado={setEstado} recarregar={carregar} />
       <Confirmacoes />
     </>
   );
 }
 
-function Telas({ estado, erro, avisoLogin, entrou, sair, setEstado }) {
+function Telas({ estado, erro, avisoLogin, entrou, sair, setEstado, recarregar }) {
   if (erro) {
     return <div className="faixa-erro">Não foi possível falar com a API local: {erro}. Ela está rodando (npm run dev)?</div>;
   }
@@ -411,5 +417,7 @@ function Telas({ estado, erro, avisoLogin, entrou, sair, setEstado }) {
   if (!estado.configurado) return <TelaConfiguracao onConfigurado={entrou} ambiente={estado.ambiente} />;
   if (!estado.usuario) return <TelaLogin onEntrou={entrou} aviso={avisoLogin} ambiente={estado.ambiente} />;
   // A chave remonta tudo ao trocar de usuário ou produtor (nada de dados misturados na tela).
-  return <Principal key={`${estado.usuario.id}-${estado.produtor?.id ?? 'nenhum'}`} estado={estado} onEstado={setEstado} onSair={sair} />;
+  // Bloquear ou desbloquear também remonta (as abas mudam).
+  const bloqueio = estado.mensalidade?.situacao === 'bloqueado' ? 'b' : 'l';
+  return <Principal key={`${estado.usuario.id}-${estado.produtor?.id ?? 'nenhum'}-${bloqueio}`} estado={estado} onEstado={setEstado} onSair={sair} onRecarregar={recarregar} />;
 }

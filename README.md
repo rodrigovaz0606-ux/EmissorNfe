@@ -54,6 +54,22 @@ Para usar sem o Vite (interface já compilada servida pelo próprio backend): `n
 - **Segurança:** as senhas são guardadas como hash Argon2id. A sessão fica num cookie `HttpOnly` + `SameSite=Strict` e expira após 8 horas sem uso. Depois de 5 senhas erradas, o login fica bloqueado por 5 minutos. Pedidos de alteração vindos de outros sites são recusados. O .pfx e a senha de cada produtor são guardados **cifrados (AES-256-GCM)** com a chave-mestra, que fica em `NFE_CHAVE_MESTRA` ou no arquivo `chave-mestra.key`, ao lado do banco e criado na primeira execução. **Faça backup da chave junto com o banco:** sem ela, os certificados guardados não abrem.
 - Bancos de antes do login são migrados automaticamente: ao cadastrar o produtor com o mesmo documento do emitente, as notas antigas passam a ser dele.
 
+## Mensalidade (Pix pelo GatewayRR)
+
+Desligada por padrão. Com `API_PAGAMENTO=true` no `.env`, cada produtor paga uma mensalidade por Pix, cobrada pelo [GatewayRR](https://github.com/limiticel/GatewayRR):
+
+- **Cadastro:** ao adicionar um produtor, escolhe-se o **dia do vencimento** (1 a 28). O primeiro vencimento é a próxima data com esse dia.
+- **Pagamento:** aba *Mensalidade*. O Pix (QR code gerado pelo próprio sistema e copia e cola) fica disponível a partir de 10 dias antes do vencimento. O pagador é o próprio produtor (nome e CPF/CNPJ do certificado). A confirmação é automática: o sistema consulta o gateway a cada minuto e enquanto a tela está aberta. Pagar avança o vencimento em um mês.
+- **Aviso e bloqueio:** a faixa no topo avisa 5 dias antes e durante o atraso. Com **5 dias de atraso**, a emissão daquele produtor é bloqueada (notas, eventos, cadastros); a aba *Mensalidade* continua aberta para pagar, e o desbloqueio é imediato.
+- **Administrador:** na aba *Produtores*, pode mudar o próximo vencimento (ex.: pagamento combinado por fora).
+- **Segurança:** os pedidos ao gateway são assinados com Ed25519 (a chave privada nunca sai desta máquina), por HTTPS, sem seguir redirecionamentos. O pagamento só conta depois de o gateway confirmar. Cada tentativa tem uma chave de idempotência guardada antes do envio: repetir depois de uma falha de rede não cria um segundo Pix.
+
+Para ligar:
+
+1. `npm run pagamento-chave` e envie a **chave pública** ao operador do GatewayRR, que a registra com `payments:read+payments:write` e devolve o ID.
+2. No `.env`: `API_PAGAMENTO=true`, `URL_API_PAGAMENTO` (só o endereço, `https://`), `PAGAMENTO_CHAVE_ID`, `PAGAMENTO_CHAVE_PRIVADA` e `PAGAMENTO_VALOR_MENSAL` (ex.: `99,90`). Configuração incompleta impede o sistema de subir.
+3. Produtores já cadastrados antes de ligar ficam **sem vencimento** (não são cobrados nem bloqueados) até o administrador definir um.
+
 ## Configuração
 
 1. Copie `.env.example` para `.env` (se ainda não existir).
@@ -115,6 +131,7 @@ Os comandos chamam o binário `emissor-nfe` (`cargo run -- <comando>`); ele tamb
 | `fiscal/soap.rs`, `fiscal/servicos.rs` | SOAP 1.2 com TLS mútuo (Schannel no Windows) e os serviços da SEFAZ |
 | `danfe/` | DANFE em PDF (Code-128, várias folhas, marcas d'água) |
 | `db.rs`, `emissao.rs`, `servidor.rs` | SQLite (com migrações), regras de emissão/eventos e API HTTP (axum) |
+| `pagamento.rs` | Mensalidade por Pix: cliente assinado do GatewayRR, vencimento, aviso e bloqueio |
 | `auth.rs`, `contas.rs`, `cofre.rs` | Login (Argon2id, sessões, bloqueio), usuários, produtores e cofre AES-256-GCM dos certificados |
 | `produtos.rs`, `clientes.rs` | Cadastros de produtos e clientes (validação; código ou documento único por produtor) |
 | `estoque.rs` | Saldo por movimentos: manuais, notas autorizadas e estorno no cancelamento |

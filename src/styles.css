@@ -655,3 +655,11 @@ button.indicador:hover { border-color: var(--cor); }
 .confirmacao-detalhes dd { margin: 0; font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
 .confirmacao-destaque { margin-top: 10px !important; color: var(--erro) !important; font-weight: 650; }
 .confirmacao .janela-botoes button { min-width: 96px; }
+
+/* Mensalidade */
+.qr-pix { display: block; margin: 12px auto; background: #fff; padding: 8px; border-radius: 8px; max-width: 100%; height: auto; }
+.cartao-produtor textarea { width: 100%; font-family: ui-monospace, monospace; font-size: 12px; word-break: break-all; resize: none; }
+.vencimento-admin { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0; }
+.vencimento-admin small.ok { color: var(--ok, #16a34a); }
+.vencimento-admin small.vence { color: var(--erro); }
+.faixa-simulada .btn-texto, .faixa-erro .btn-texto { margin-left: 8px; font-weight: 700; text-decoration: underline; }

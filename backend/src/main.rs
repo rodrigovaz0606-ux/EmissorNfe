@@ -8,6 +8,7 @@
 //!   emissor-nfe enviar            gera, assina, valida e ENVIA o exemplo (homologação)
 //!   emissor-nfe consultar <chave> situação de uma NF-e na SEFAZ (somente leitura)
 //!   emissor-nfe gerar-xml         lê os dados da nota (JSON) da entrada padrão e escreve o XML sem assinatura
+//!   emissor-nfe pagamento-chave   gera o par de chaves da mensalidade (GatewayRR)
 
 use anyhow::{Context, Result, bail};
 use emissor_nfe::exemplo::venda_soja;
@@ -175,6 +176,17 @@ fn gerar_xml() -> Result<bool> {
     Ok(true)
 }
 
+/// Gera o par de chaves que assina os pedidos ao GatewayRR (mensalidade).
+fn pagamento_chave() -> Result<bool> {
+    let (publica, privada) = emissor_nfe::pagamento::gerar_chaves();
+    println!("Chave pública (envie ao operador do GatewayRR para registrar com payments:read+payments:write):");
+    println!("  {publica}");
+    println!();
+    println!("Chave privada (coloque no .env e não mostre a ninguém):");
+    println!("  PAGAMENTO_CHAVE_PRIVADA={privada}");
+    Ok(true)
+}
+
 fn main() -> ExitCode {
     emissor_nfe::carregar_env(&raiz_do_projeto().join(".env"));
     let mut args = std::env::args().skip(1);
@@ -188,7 +200,8 @@ fn main() -> ExitCode {
         "enviar" => enviar(),
         "consultar" => consultar(args.next()),
         "gerar-xml" => gerar_xml(),
-        outro => Err(anyhow::anyhow!("Comando desconhecido: {outro}. Use: servidor, status, cert, gerar, validar, enviar, consultar, gerar-xml")),
+        "pagamento-chave" => pagamento_chave(),
+        outro => Err(anyhow::anyhow!("Comando desconhecido: {outro}. Use: servidor, status, cert, gerar, validar, enviar, consultar, gerar-xml, pagamento-chave")),
     };
     match resultado {
         Ok(true) => ExitCode::SUCCESS,

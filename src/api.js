@@ -1,10 +1,11 @@
 // Cliente da API. A sessão é um cookie HttpOnly (o JavaScript não tem acesso ao token).
 // 401 → a sessão caiu: avisa o App para mostrar o login.
 // 409 → nenhum produtor selecionado: avisa o App para mostrar a escolha de produtor.
+// 402 → mensalidade em atraso: avisa o App para recarregar a situação (tela de pagamento).
 export const EVENTO_SESSAO = 'emissor:sessao';
 
 function avisarSessao(status) {
-  if (status === 401 || status === 409) window.dispatchEvent(new CustomEvent(EVENTO_SESSAO, { detail: { status } }));
+  if (status === 401 || status === 402 || status === 409) window.dispatchEvent(new CustomEvent(EVENTO_SESSAO, { detail: { status } }));
 }
 
 async function chamar(url, opcoes = {}, { silencioso = false } = {}) {
@@ -59,7 +60,7 @@ export const api = {
 
   // produtores
   produtores: () => chamar('/api/produtores'),
-  adicionarProdutor: (pfx, senha) => post('/api/produtores', { pfx, senha }),
+  adicionarProdutor: (pfx, senha, extra = {}) => post('/api/produtores', { pfx, senha, ...extra }),
   renovarCertificado: (id, pfx, senha) => put(`/api/produtores/${id}/certificado`, { pfx, senha }),
   definirEmitente: (id, emitente) => put(`/api/produtores/${id}/emitente`, emitente),
   removerProdutor: (id) => apagar(`/api/produtores/${id}`),
@@ -69,6 +70,11 @@ export const api = {
   usuarios: () => chamar('/api/admin/usuarios'),
   criarUsuario: (dados) => post('/api/admin/usuarios', dados),
   alterarUsuario: (id, dados) => put(`/api/admin/usuarios/${id}`, dados),
+  definirVencimento: (id, vencimento) => put(`/api/admin/produtores/${id}/vencimento`, { vencimento }),
+
+  // mensalidade (acessível mesmo com o produtor bloqueado)
+  mensalidade: () => chamar('/api/mensalidade', {}, { silencioso: true }),
+  gerarPixMensalidade: () => post('/api/mensalidade/pix', {}, { silencioso: true }),
 
   // emissão (produtor selecionado)
   emissor: () => chamar('/api/emissor'),
