@@ -24,6 +24,7 @@ let perfilEdge; // pasta temporária exclusiva deste Edge de teste
 let navegador;
 let pagina;
 const errosDaPagina = [];
+const caixasNativas = [];
 
 // O Playwright compatível com Node 18 não consegue iniciar o Edge 156 sozinho,
 // então abrimos o Edge com a porta de depuração e conectamos via CDP.
@@ -107,7 +108,8 @@ describe('interface (Edge + SEFAZ simulada)', () => {
     for (const f of [DB, `${DB}-wal`, `${DB}-shm`]) fs.rmSync(f, { force: true });
     if (!fs.existsSync(BINARIO)) throw new Error(`Backend não compilado: ${BINARIO} (rode npm run e2e)`);
     servidor = spawn(BINARIO, ['servidor'], {
-      env: { ...process.env, PORT: String(PORTA), NFE_SEFAZ_SIMULADA: '1', NFE_DB: DB, NFE_CHAVE_MESTRA: 'ab'.repeat(32) },
+      // Homologação explícita: o .env do projeto pode estar em produção, e o teste usa a SEFAZ simulada.
+      env: { ...process.env, PORT: String(PORTA), NFE_AMBIENTE: 'homologacao', NFE_SEFAZ_SIMULADA: '1', NFE_DB: DB, NFE_CHAVE_MESTRA: 'ab'.repeat(32) },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     servidor.stderr.on('data', (d) => process.stderr.write(`[api] ${d}`));
@@ -115,7 +117,17 @@ describe('interface (Edge + SEFAZ simulada)', () => {
     await esperarServidor();
     navegador = await abrirEdge();
     pagina = await (await navegador.newContext({ viewport: { width: 1440, height: 900 }, locale: 'pt-BR' })).newPage();
-    pagina.on('dialog', (d) => d.accept()); // confirmações de "Emitir" e "Nova nota"
+    // O sistema não usa caixas nativas: se alguma aparecer, o teste falha (ver último teste).
+    pagina.on('dialog', (d) => { caixasNativas.push(d.message()); d.dismiss(); });
+    // Responde "Sim" sozinho às confirmações do sistema (como um usuário que confirma),
+    // a não ser que o teste desligue isso para conferir a janela.
+    await pagina.addInitScript(() => {
+      window.__confirmarAutomatico = true;
+      new MutationObserver(() => {
+        const sim = document.querySelector('.confirmacao [data-resposta="sim"]');
+        if (sim && window.__confirmarAutomatico) sim.click();
+      }).observe(document, { childList: true, subtree: true });
+    })
     pagina.on('pageerror', (e) => errosDaPagina.push(e.message));
   });
 
@@ -282,6 +294,23 @@ describe('interface (Edge + SEFAZ simulada)', () => {
   });
 
   test('emite (simulado), mostra protocolo e oferece DANFE', async () => {
+    // Confirmação do próprio sistema, com resumo da nota e Sim/Não. "Não" não envia nada.
+    await pagina.evaluate(() => { window.__confirmarAutomatico = false; });
+    await pagina.getByRole('button', { name: 'Emitir nota' }).click();
+    const pergunta = pagina.getByRole('alertdialog');
+    await pergunta.getByRole('heading', { name: 'Emitir a nota fiscal?' }).waitFor();
+    const texto = await pergunta.innerText();
+    assert.match(texto, /Nota\s+nº \d+ · série 920/);
+    assert.match(texto, /Emitente\s+PRODUTOR TESTE \(e-CPF\)/);
+    assert.match(texto, /Valor total\s+R\$\s*66\.250,00/);
+    assert.match(texto, /SEFAZ SIMULADA/);
+    assert.deepEqual(await pergunta.getByRole('button').allInnerTexts(), ['Não', 'Sim']);
+    await print('2a-confirmacao');
+    await pergunta.getByRole('button', { name: 'Não' }).click();
+    await pergunta.waitFor({ state: 'detached' });
+    assert.equal(await pagina.getByText('Nota autorizada').count(), 0, '"Não" não emite');
+    await pagina.evaluate(() => { window.__confirmarAutomatico = true; });
+
     await pagina.getByRole('button', { name: 'Emitir nota' }).click();
     await pagina.locator('.resultado').waitFor({ timeout: 15000 });
     const resultado = await pagina.locator('.resultado').innerText();
@@ -758,7 +787,8 @@ describe('interface (Edge + SEFAZ simulada)', () => {
     await pagina.emulateMedia({ reducedMotion: null });
   });
 
-  test('nenhum erro de JavaScript na página', () => {
+  test('nenhum erro de JavaScript na página e nenhuma caixa nativa do navegador', () => {
     assert.deepEqual(errosDaPagina, []);
+    assert.deepEqual(caixasNativas, []);
   });
 });

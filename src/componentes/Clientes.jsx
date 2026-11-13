@@ -2,6 +2,7 @@ import React from 'react';
 import { api } from '../api.js';
 import { EsqueletoTabela } from './Movimento.jsx';
 import { Janela } from './Janela.jsx';
+import { confirmar } from './Confirmacao.jsx';
 import { CamposDestinatario, mascara } from './Destinatario.jsx';
 import { clienteVazio, destDoCliente, cpfValido, cnpjValido, digitos } from '../modelo.js';
 
@@ -69,7 +70,7 @@ export function Clientes({ onAlterados }) {
   }
 
   async function excluir(c) {
-    if (!window.confirm(`Excluir o cliente ${c.xNome} do cadastro? Notas já emitidas não mudam.`)) return;
+    if (!(await confirmar({ titulo: 'Excluir o cliente?', mensagem: `${c.xNome} sai do cadastro. Notas já emitidas não mudam.`, perigo: true, sim: 'Sim, excluir' }))) return;
     try {
       await api.excluirCliente(c.id);
       await aposMudanca(`Cliente ${c.xNome} excluído.`);

@@ -4,7 +4,7 @@ chcp 65001 >nul
 cd /d "%~dp0"
 title Emissor NF-e
 echo.
-echo   Emissor NF-e - homologacao
+echo   Emissor NF-e
 echo   Deixe esta janela aberta enquanto usa o emissor. Para encerrar, feche a janela.
 echo.
 rem Abre o navegador depois de 2 segundos, quando o servidor ja subiu.

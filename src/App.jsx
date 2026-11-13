@@ -15,6 +15,8 @@ import { Produtores, formatarDoc } from './componentes/Produtores.jsx';
 import { Admin, JanelaSenha } from './componentes/Admin.jsx';
 import { TelaLogin, TelaConfiguracao } from './componentes/Acesso.jsx';
 import { Abas, BotaoTema } from './componentes/Movimento.jsx';
+import { Confirmacoes, confirmar, avisar } from './componentes/Confirmacao.jsx';
+import { moeda } from './modelo.js';
 
 const ABAS_EMISSAO = [['painel', 'Painel'], ['emitir', 'Emitir nota'], ['notas', 'Notas emitidas'], ['clientes', 'Clientes'], ['produtos', 'Produtos']];
 // Rascunho da nota por produtor (trocar de produtor não mistura os rascunhos).
@@ -145,15 +147,21 @@ function Emissao({ produtor, emissor, onVerNotas, produtos, carregarProdutos, cl
   const producao = emissor?.ambiente === 'producao';
 
   async function executar(modo) {
-    const destino = emissor?.simulada ? 'a SEFAZ SIMULADA (nada é enviado)' : `a SEFAZ-${emissor?.uf} em HOMOLOGAÇÃO (sem valor fiscal)`;
-    if (modo === 'emitir' && producao) {
-      // Produção: nota com valor fiscal real no nome do produtor. Exige digitar EMITIR.
-      const resposta = window.prompt(
-        `ATENÇÃO: NOTA FISCAL REAL (PRODUÇÃO)\n\nNota nº ${nota.ide.nNF} série ${nota.ide.serie}, de ${produtor.titular} (${produtor.tipo} ${produtor.documento}), `
-        + `para ${nota.dest.xNome || 'o destinatário'}.\nEla terá valor fiscal; se houver erro, será preciso cancelar.\n\nDigite EMITIR para confirmar:`,
-      );
-      if ((resposta ?? '').trim().toUpperCase() !== 'EMITIR') return;
-    } else if (modo === 'emitir' && !window.confirm(`Enviar a nota nº ${nota.ide.nNF} de ${produtor.titular} para ${destino}?`)) return;
+    if (modo === 'emitir') {
+      const onde = emissor?.simulada ? 'SEFAZ SIMULADA (nada é enviado)' : producao ? `SEFAZ-${emissor?.uf} — PRODUÇÃO` : `SEFAZ-${emissor?.uf} — homologação (sem valor fiscal)`;
+      const sim = await confirmar({
+        titulo: 'Emitir a nota fiscal?',
+        detalhes: [
+          ['Nota', `nº ${nota.ide.nNF} · série ${nota.ide.serie}`],
+          ['Emitente', `${produtor.titular} (${produtor.tipo})`],
+          ['Destinatário', nota.dest.xNome || '—'],
+          ['Valor total', moeda(totais.vNF)],
+          ['Envio', onde],
+        ],
+        destaque: producao && !emissor?.simulada ? 'Esta nota terá valor fiscal. Se houver erro, será preciso cancelá-la.' : undefined,
+      });
+      if (!sim) return;
+    }
     setOcupado(modo);
     setResultado(null);
     try {
@@ -178,13 +186,13 @@ function Emissao({ produtor, emissor, onVerNotas, produtos, carregarProdutos, cl
       await api.definirEmitente(produtor.id, resto);
       setEmitenteSalvo(true);
     } catch (e) {
-      window.alert(e.message);
+      avisar({ titulo: 'Não foi possível salvar o emitente', mensagem: e.message, perigo: true });
     }
   }
 
   async function salvarProduto(p) {
     const existente = produtos?.find((x) => x.cProd.toUpperCase() === p.cProd.trim().toUpperCase());
-    if (existente && !window.confirm(`Já existe o produto ${existente.cProd} (${existente.xProd}). Substituir pelos dados deste item?`)) {
+    if (existente && !(await confirmar({ titulo: 'Substituir o produto?', mensagem: `Já existe o produto ${existente.cProd} (${existente.xProd}). Substituir pelos dados deste item?` }))) {
       return 'Cadastro mantido como estava.';
     }
     // O item da nota não tem os campos de estoque: mantém os que já estavam no cadastro.
@@ -198,7 +206,7 @@ function Emissao({ produtor, emissor, onVerNotas, produtos, carregarProdutos, cl
   async function salvarCliente(d) {
     const doc = digitos(d.tipo === 'PJ' ? d.CNPJ : d.CPF);
     const existente = clientes?.find((c) => digitos(c.CPF || c.CNPJ) === doc);
-    if (existente && !window.confirm(`Já existe o cliente ${existente.xNome} com este documento. Substituir pelos dados desta nota?`)) {
+    if (existente && !(await confirmar({ titulo: 'Substituir o cliente?', mensagem: `Já existe o cliente ${existente.xNome} com este documento. Substituir pelos dados desta nota?` }))) {
       return 'Cadastro mantido como estava.';
     }
     const r = existente ? await api.alterarCliente(existente.id, d) : await api.criarCliente(d);
@@ -206,8 +214,8 @@ function Emissao({ produtor, emissor, onVerNotas, produtos, carregarProdutos, cl
     return existente ? `Cliente ${r.xNome} atualizado no cadastro.` : `Cliente ${r.xNome} cadastrado.`;
   }
 
-  function novaNota() {
-    if (!window.confirm('Começar uma nota nova? Os dados do destinatário e dos itens serão apagados.')) return;
+  async function novaNota() {
+    if (!(await confirmar({ titulo: 'Começar uma nota nova?', mensagem: 'Os dados do destinatário e dos itens desta nota serão apagados.' }))) return;
     const base = notaVazia();
     setNota({ ...base, emit: nota.emit, ide: { ...base.ide, serie: nota.ide.serie } });
     setResultado(null);
@@ -281,8 +289,8 @@ function Principal({ estado, onEstado, onSair }) {
   const verNotas = (filtro = null) => { setFiltroNotas(filtro); trocarAba('notas'); };
 
   // Duplicar: a cópia vira o rascunho do produtor, e a tela de emissão abre com ela.
-  function duplicarNota(dados) {
-    if (!window.confirm('Abrir uma nota nova com os dados desta? O rascunho atual será substituído.')) return;
+  async function duplicarNota(dados) {
+    if (!(await confirmar({ titulo: 'Duplicar esta nota?', mensagem: 'Uma nota nova será aberta com os dados desta. O rascunho atual será substituído.' }))) return;
     const chave = chaveRascunho(produtor.id);
     gravar(chave, notaDoPayload(dados, ler(chave) ?? notaInicial(produtor)));
     trocarAba('emitir');
@@ -322,9 +330,6 @@ function Principal({ estado, onEstado, onSair }) {
         </div>
       </header>
 
-      {estado.ambiente === 'producao' && (
-        <div className="faixa-producao">PRODUÇÃO — as notas emitidas aqui têm valor fiscal real.</div>
-      )}
       {estado.simulada && (
         <div className="faixa-simulada">SEFAZ SIMULADA — modo de teste da interface. Nada é enviado à SEFAZ e as “autorizações” são fictícias.</div>
       )}
@@ -390,6 +395,15 @@ export default function App() {
 
   const entrou = (e) => { setAvisoLogin(''); setEstado(e); };
 
+  return (
+    <>
+      <Telas estado={estado} erro={erro} avisoLogin={avisoLogin} entrou={entrou} sair={sair} setEstado={setEstado} />
+      <Confirmacoes />
+    </>
+  );
+}
+
+function Telas({ estado, erro, avisoLogin, entrou, sair, setEstado }) {
   if (erro) {
     return <div className="faixa-erro">Não foi possível falar com a API local: {erro}. Ela está rodando (npm run dev)?</div>;
   }

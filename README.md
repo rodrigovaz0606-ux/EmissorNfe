@@ -4,7 +4,7 @@ NF-e modelo 55 emitida direto na SEFAZ. **Backend em Rust** (`backend/`), interf
 
 **Homologação por padrão.** Para emitir notas com **valor fiscal**, coloque `NFE_AMBIENTE=producao` no `.env` e reinicie. Em produção:
 - o banco é outro (`data/producao.sqlite`): crie o administrador e cadastre os produtores de novo, e as notas de teste não se misturam com as reais;
-- a interface mostra o selo e a faixa vermelhos **PRODUÇÃO** e pede para digitar **EMITIR** antes de enviar cada nota;
+- a interface mostra o selo vermelho **PRODUÇÃO** no topo, e antes de cada nota pergunta "Emitir a nota fiscal?" com o resumo (Sim/Não);
 - a conexão confere o certificado do servidor da SEFAZ com as raízes da ICP-Brasil embutidas (`backend/src/fiscal/raizes-icp-brasil.pem`, do ITI) e recusa a conexão se não bater;
 - o comando `npm run enviar` (nota de exemplo) é bloqueado.
 
@@ -41,6 +41,7 @@ Abra http://localhost:5175. A API (Rust) fica em http://localhost:3335 e só ace
 - **Filtros** em Notas emitidas (período, situação, número, destinatário, CPF/CNPJ ou chave)
 - **Exportar para o contador**: ZIP com os XMLs do período (notas autorizadas, canceladas e denegadas, eventos e inutilizações) e um `resumo.csv` que abre no Excel
 - Notas emitidas: DANFE em PDF, XML, carta de correção, cancelamento, consulta e inutilização
+- Confirmações e avisos usam uma janela do próprio sistema (Sim/Não), nunca as caixas nativas do navegador
 - O rascunho e o emitente padrão ficam salvos no navegador (localStorage)
 
 Para usar sem o Vite (interface já compilada servida pelo próprio backend): `npm run build` e depois `npm start`, em http://localhost:3335.

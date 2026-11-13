@@ -25,10 +25,11 @@ Copy-Item -Recurse (Join-Path $raiz 'dist') $destino
 Copy-Item -Recurse (Join-Path $raiz 'schemas') $destino
 Copy-Item (Join-Path $PSScriptRoot 'INICIAR.bat') $destino
 Copy-Item (Join-Path $PSScriptRoot 'LEIA-ME.txt') $destino
-# Configuracao minima: sem caminho nem senha de certificado (eles entram pela tela de Produtores).
+# Configuracao minima, em PRODUCAO (notas com valor fiscal). Sem caminho nem senha de certificado
+# (eles entram pela tela de Produtores).
 Set-Content -Encoding ascii (Join-Path $destino '.env') @(
   'NFE_UF=GO',
-  'NFE_AMBIENTE=homologacao'
+  'NFE_AMBIENTE=producao'
 )
 
 Write-Host '4/4 Compactando...'

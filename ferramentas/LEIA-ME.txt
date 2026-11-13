@@ -1,4 +1,4 @@
-EMISSOR NF-e (HOMOLOGAÇÃO) — COMO USAR NESTE PC
+EMISSOR NF-e (PRODUÇÃO) — COMO USAR NESTE PC
 ================================================
 
 1. Dê dois cliques em INICIAR.bat.
@@ -14,9 +14,9 @@ EMISSOR NF-e (HOMOLOGAÇÃO) — COMO USAR NESTE PC
    Depois preencha a nota, clique em "Validar" e, se estiver tudo certo, "Emitir nota".
 
 IMPORTANTE
-- Por padrão emite em HOMOLOGAÇÃO (sem valor fiscal). Para notas REAIS, edite o arquivo .env,
-  troque NFE_AMBIENTE=homologacao por NFE_AMBIENTE=producao e abra o INICIAR.bat de novo.
-  Em produção o banco é outro (data\producao.sqlite): crie o administrador e cadastre o produtor de novo.
+- Este pacote vem em PRODUÇÃO: as notas emitidas têm VALOR FISCAL. Para voltar ao teste
+  (homologação), edite o arquivo .env, troque NFE_AMBIENTE=producao por NFE_AMBIENTE=homologacao
+  e abra o INICIAR.bat de novo. Cada ambiente tem o seu banco (producao.sqlite / emissor.sqlite).
 - A pasta data\ guarda o banco e a chave que protege os certificados (chave-mestra.key).
   Não compartilhe a pasta data\ e não a envie para ninguém.
 - Para remover tudo deste PC depois do teste: na aba Produtores, use "Remover"

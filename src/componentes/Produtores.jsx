@@ -2,6 +2,7 @@ import React from 'react';
 import { api, arquivoEmBase64 } from '../api.js';
 import { EsqueletoTabela } from './Movimento.jsx';
 import { Janela } from './Janela.jsx';
+import { confirmar } from './Confirmacao.jsx';
 
 export const formatarDoc = (d = '') =>
   d.length === 11 ? d.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4')
@@ -96,7 +97,7 @@ export function Produtores({ usuario, produtorAtivo, onSelecionado, onAlterados,
 
   async function remover(p) {
     const msg = `Remover ${p.titular}?\n\nO certificado guardado será apagado. As notas já emitidas continuam no banco e voltam a aparecer se o produtor for cadastrado de novo.`;
-    if (!window.confirm(msg)) return;
+    if (!(await confirmar({ titulo: `Remover ${p.titular}?`, mensagem: msg.split('\n\n')[1], perigo: true, sim: 'Sim, remover' }))) return;
     try {
       await api.removerProdutor(p.id);
       setAviso({ ok: true, texto: `${p.titular} removido.` });

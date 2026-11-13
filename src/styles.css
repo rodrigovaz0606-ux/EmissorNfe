@@ -634,6 +634,24 @@ button.indicador:hover { border-color: var(--cor); }
 
 /* ---------- produção (notas com valor fiscal) ---------- */
 .marca .selo-ambiente.producao { background: #dc2626; color: white; }
-.faixa-producao { background: #b91c1c; color: white; font-weight: 700; text-align: center; padding: 7px 16px; font-size: 13px; letter-spacing: 0.2px; }
 .texto-producao { color: #dc2626; }
 :root[data-tema='escuro'] .texto-producao { color: #f87171; }
+
+/* ---------- confirmação (substitui as caixas nativas do navegador) ---------- */
+.confirmacao-fundo { z-index: 80; }
+.confirmacao {
+  width: 100%; max-width: 440px; background: var(--cartao); color: var(--texto); border-radius: 16px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.3); padding: 22px; display: flex; flex-direction: column; gap: 14px;
+  animation: entrar-janela 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.confirmacao-cabeca { display: flex; align-items: center; gap: 12px; }
+.confirmacao-cabeca h2 { font-size: 17px; }
+.confirmacao-icone { flex: none; width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; background: var(--cor-clara); color: var(--cor-escura); }
+.confirmacao.perigo .confirmacao-icone { background: var(--erro-fundo); color: var(--erro); }
+.confirmacao-texto p { margin: 0; color: var(--texto-2); line-height: 1.5; }
+.confirmacao-detalhes { margin: 0; display: flex; flex-direction: column; gap: 6px; background: var(--superficie-2); border: 1px solid var(--borda); border-radius: 10px; padding: 10px 12px; }
+.confirmacao-detalhes div { display: flex; justify-content: space-between; gap: 16px; }
+.confirmacao-detalhes dt { color: var(--suave); font-size: 13px; }
+.confirmacao-detalhes dd { margin: 0; font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
+.confirmacao-destaque { margin-top: 10px !important; color: var(--erro) !important; font-weight: 650; }
+.confirmacao .janela-botoes button { min-width: 96px; }

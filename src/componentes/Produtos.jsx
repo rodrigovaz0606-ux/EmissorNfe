@@ -3,6 +3,7 @@ import { api } from '../api.js';
 import { Campo, Selecao } from './campos.jsx';
 import { EsqueletoTabela } from './Movimento.jsx';
 import { Janela } from './Janela.jsx';
+import { confirmar } from './Confirmacao.jsx';
 import { Tributos } from './Tributos.jsx';
 import { CFOPS, UNIDADES, CST_ICMS } from '../opcoes.js';
 import { produtoVazio, num, digitos, formatarQuantidade, estoqueBaixo } from '../modelo.js';
@@ -203,7 +204,10 @@ export function Produtos({ onAlterados }) {
   }
 
   async function excluir(p) {
-    if (!window.confirm(`Excluir o produto ${p.xProd} (${p.cProd}) do cadastro? O histórico de estoque dele também será apagado. Notas já emitidas não mudam.`)) return;
+    if (!(await confirmar({
+      titulo: 'Excluir o produto?', perigo: true, sim: 'Sim, excluir',
+      mensagem: `${p.xProd} (${p.cProd}) sai do cadastro e o histórico de estoque dele é apagado. Notas já emitidas não mudam.`,
+    }))) return;
     try {
       await api.excluirProduto(p.id);
       await aposMudanca(`Produto ${p.xProd} excluído.`);
