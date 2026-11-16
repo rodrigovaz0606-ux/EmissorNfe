@@ -13,6 +13,16 @@ EMISSOR NF-e (PRODUÇÃO) — COMO USAR NESTE PC
 4. Preencha o emitente (Inscrição Estadual, endereço) e clique em "Salvar como padrão".
    Depois preencha a nota, clique em "Validar" e, se estiver tudo certo, "Emitir nota".
 
+SERVIDOR NA INTERNET (https://sistemasvaz.com.br)
+- No PC servidor (o mesmo do Campo Certo), dê dois cliques em "INSTALAR SERVIDOR.cmd" e aceite
+  a permissão de administrador. O emissor passa a ligar sozinho com o Windows (não precisa do
+  INICIAR.bat) e fica em C:\ProgramData\EmissorNfe.
+- Se você extrair este pacote por cima da pasta que já usava (com a pasta data\), as notas, os
+  produtores e a chave vão junto para a instalação.
+- O usuário administrador só pode ser criado no próprio servidor (http://localhost:3335).
+  Pela internet, só se entra com um usuário que já existe.
+- Para atualizar o sistema depois, extraia o pacote novo e rode o INSTALAR SERVIDOR.cmd de novo.
+
 IMPORTANTE
 - Este pacote vem em PRODUÇÃO: as notas emitidas têm VALOR FISCAL. Para voltar ao teste
   (homologação), edite o arquivo .env, troque NFE_AMBIENTE=producao por NFE_AMBIENTE=homologacao

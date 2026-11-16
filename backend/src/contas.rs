@@ -368,6 +368,39 @@ pub fn ativo_da_sessao(ctx: &Contexto, s: &SessaoAtual) -> Result<Option<Ativo>>
 }
 
 /// Dados do produtor ativo para a interface (certificado + emitente padrão).
+/// Numeração do produtor: última nota emitida fora deste sistema, por série, e o próximo número.
+pub fn numeracao(ctx: &Contexto, s: &SessaoAtual, id: i64) -> Result<Value> {
+    produtor_acessivel(ctx, &s.usuario, id)?;
+    let p = ctx.repo().produtor(id)?.ok_or_else(|| negocio("Produtor não encontrado."))?;
+    // CPF emite na série 920 (NT 2018.001); CNPJ, na 1. Sempre mostra a série padrão.
+    let padrao = if p.documento.len() == 11 { 920 } else { 1 };
+    let repo = ctx.repo();
+    let mut externa = repo.numeracao_externa(id)?;
+    if !externa.iter().any(|e| e["serie"] == json!(padrao)) {
+        externa.insert(0, json!({ "serie": padrao, "ultimo": 0, "origem": null, "chave": null, "atualizado_em": null }));
+    }
+    for e in externa.iter_mut() {
+        let serie = e["serie"].as_i64().unwrap_or(padrao);
+        e["proximo"] = json!(repo.proximo_numero(id, serie)?);
+    }
+    Ok(json!({ "seriePadrao": padrao, "series": externa }))
+}
+
+/// Informa a última nota emitida fora deste sistema numa série (0 apaga a informação).
+pub fn definir_numeracao(ctx: &Contexto, s: &SessaoAtual, id: i64, dados: &Value) -> Result<Value> {
+    produtor_acessivel(ctx, &s.usuario, id)?;
+    let numero = |nome: &str| match dados.get(nome) {
+        Some(Value::Number(n)) => n.as_i64(),
+        Some(Value::String(t)) if t.trim().is_empty() => Some(0),
+        Some(Value::String(t)) => t.trim().parse().ok(),
+        _ => None,
+    };
+    let serie = numero("serie").filter(|n| (0..=999).contains(n)).ok_or_else(|| negocio("Série inválida (0 a 999)."))?;
+    let ultimo = numero("ultimo").filter(|n| (0..=999_999_999).contains(n)).ok_or_else(|| negocio("Número da última nota inválido."))?;
+    ctx.repo().definir_ultimo_externo(id, serie, ultimo)?;
+    numeracao(ctx, s, id)
+}
+
 pub fn produtor_json(ctx: &Contexto, id: i64) -> Result<Value> {
     let p = ctx.repo().produtor(id)?.ok_or_else(|| negocio("Produtor não encontrado."))?;
     let emitente = p.emitente_json.as_deref().and_then(|s| serde_json::from_str(s).ok()).unwrap_or(Value::Null);

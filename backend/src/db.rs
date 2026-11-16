@@ -191,6 +191,21 @@ CREATE TABLE cobrancas (
 CREATE INDEX ix_cobrancas_situacao ON cobrancas (situacao);
 ";
 
+/// Migração 5: notas que o produtor emitiu FORA deste sistema (outro emissor, portal da SEFAZ).
+/// A SEFAZ não informa a última nota de um emitente; o número vem do cadastro do produtor
+/// ("última nota emitida fora") ou da própria SEFAZ ao recusar um número já usado (539).
+const MIGRACAO_5: &str = "
+CREATE TABLE numeracao_externa (
+  produtor_id   INTEGER NOT NULL REFERENCES produtores(id) ON DELETE CASCADE,
+  serie         INTEGER NOT NULL,
+  ultimo_nNF    INTEGER NOT NULL,
+  chave         TEXT,                   -- chave da nota de fora, quando veio da rejeição 539
+  origem        TEXT NOT NULL,          -- 'cadastro' ou 'sefaz'
+  atualizado_em TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+  PRIMARY KEY (produtor_id, serie)
+);
+";
+
 /// Quantidades de estoque são guardadas como inteiros: qCom tem até 4 casas decimais.
 pub const ESCALA_ESTOQUE: f64 = 10_000.0;
 
@@ -563,6 +578,9 @@ impl Repositorio {
         if versao < 4 {
             db.execute_batch(&format!("BEGIN; {MIGRACAO_4} PRAGMA user_version = 4; COMMIT;"))?;
         }
+        if versao < 5 {
+            db.execute_batch(&format!("BEGIN; {MIGRACAO_5} PRAGMA user_version = 5; COMMIT;"))?;
+        }
         Ok(Repositorio { db })
     }
 
@@ -703,7 +721,72 @@ impl Repositorio {
             [produtor, serie],
             |r| r.get(0),
         )?;
-        Ok(a.unwrap_or(0).max(b.unwrap_or(0)) + 1)
+        Ok(a.unwrap_or(0).max(b.unwrap_or(0)).max(self.ultimo_externo(produtor, serie)?) + 1)
+    }
+
+    /// Última nota emitida fora deste sistema (0 se não informada).
+    pub fn ultimo_externo(&self, produtor: i64, serie: i64) -> Result<i64> {
+        Ok(self
+            .db
+            .query_row("SELECT ultimo_nNF FROM numeracao_externa WHERE produtor_id = ? AND serie = ?", [produtor, serie], |r| r.get(0))
+            .optional()?
+            .unwrap_or(0))
+    }
+
+    /// Numeração de fora por série: [{ serie, ultimo, origem, chave, atualizado_em }].
+    pub fn numeracao_externa(&self, produtor: i64) -> Result<Vec<Value>> {
+        self.linhas(
+            "SELECT serie, ultimo_nNF AS ultimo, origem, chave, atualizado_em FROM numeracao_externa WHERE produtor_id = ? ORDER BY serie",
+            [produtor],
+        )
+    }
+
+    /// Informado no cadastro: vale exatamente o que o usuário digitou (0 apaga).
+    pub fn definir_ultimo_externo(&self, produtor: i64, serie: i64, ultimo: i64) -> Result<()> {
+        if ultimo <= 0 {
+            self.db.execute("DELETE FROM numeracao_externa WHERE produtor_id = ? AND serie = ?", [produtor, serie])?;
+        } else {
+            self.db.execute(
+                "INSERT INTO numeracao_externa (produtor_id, serie, ultimo_nNF, chave, origem) VALUES (?, ?, ?, NULL, 'cadastro')
+                 ON CONFLICT (produtor_id, serie) DO UPDATE SET ultimo_nNF = excluded.ultimo_nNF, chave = NULL,
+                   origem = 'cadastro', atualizado_em = datetime('now', 'localtime')",
+                [produtor, serie, ultimo],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// A SEFAZ disse que o número já foi usado (539): só avança, nunca volta.
+    pub fn registrar_numero_externo(&self, produtor: i64, serie: i64, n_nf: i64, chave: Option<&str>) -> Result<()> {
+        self.db.execute(
+            "INSERT INTO numeracao_externa (produtor_id, serie, ultimo_nNF, chave, origem) VALUES (?1, ?2, ?3, ?4, 'sefaz')
+             ON CONFLICT (produtor_id, serie) DO UPDATE SET ultimo_nNF = excluded.ultimo_nNF, chave = excluded.chave,
+               origem = 'sefaz', atualizado_em = datetime('now', 'localtime')
+             WHERE excluded.ultimo_nNF > numeracao_externa.ultimo_nNF",
+            params![produtor, serie, n_nf, chave],
+        )?;
+        Ok(())
+    }
+
+    /// Há outra nota DESTE sistema com esse número que não foi rejeitada (ex.: pendente porque a
+    /// conexão caiu), ou com essa chave? Então o "número já usado" pode ser ela mesma.
+    pub fn numero_tem_nota_propria(&self, produtor: i64, serie: i64, n_nf: i64, exceto: i64, chave: Option<&str>) -> Result<bool> {
+        Ok(self
+            .db
+            .query_row(
+                "SELECT 1 FROM notas WHERE produtor_id = ?1 AND id <> ?4
+                   AND ((serie = ?2 AND nNF = ?3 AND status <> 'rejeitada') OR (?5 IS NOT NULL AND chave = ?5)) LIMIT 1",
+                params![produtor, serie, n_nf, exceto, chave],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()?
+            .is_some())
+    }
+
+    /// Apaga a tentativa recusada por número já usado (não é uma nota: o número era de outra).
+    pub fn excluir_tentativa(&self, id: i64) -> Result<()> {
+        self.db.execute("DELETE FROM notas WHERE id = ? AND status = 'rejeitada'", [id])?;
+        Ok(())
     }
 
     pub fn numero_ja_usado(&self, produtor: i64, serie: i64, n_nf: i64) -> Result<bool> {

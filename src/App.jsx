@@ -123,14 +123,22 @@ function Emissao({ produtor, emissor, onVerNotas, produtos, carregarProdutos, cl
     }));
   }, [emissor]);
 
-  // Sugere o próximo número livre da série (pelo banco), se o campo ainda estiver no padrão.
+  // Puxa o próximo número livre da série: notas deste sistema, inutilizações e a última nota
+  // emitida fora (cadastro do produtor ou aviso da SEFAZ). Troca o número do campo se estiver
+  // vazio, no padrão ou abaixo do próximo livre (provavelmente já usado, ex.: rascunho antigo).
   const sugerirNumero = React.useCallback(async (serie, forcar = false) => {
     try {
       const { proximo } = await api.proximoNumero(serie || 1);
-      setNota((n) => (forcar || n.ide.nNF === '' || n.ide.nNF === '1' ? { ...n, ide: { ...n.ide, nNF: String(proximo) } } : n));
+      setNota((n) => {
+        const atual = Number(n.ide.nNF);
+        const trocar = forcar || n.ide.nNF === '' || n.ide.nNF === '1' || !(atual >= proximo);
+        return trocar && String(proximo) !== n.ide.nNF ? { ...n, ide: { ...n.ide, nNF: String(proximo) } } : n;
+      });
     } catch { /* API fora do ar: mantém o número digitado */ }
   }, []);
-  React.useEffect(() => { sugerirNumero(nota.ide.serie); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Ao abrir, ao trocar a série e ao preencher a IE do emitente (o produtor está pronto para emitir).
+  const ieEmitente = (nota.emit.IE || '').replace(/\D/g, '');
+  React.useEffect(() => { sugerirNumero(nota.ide.serie); }, [nota.ide.serie, ieEmitente.length >= 8]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Série errada para o tipo de emitente (CPF usa 920 a 969): troca e busca o próximo número dela.
   const docEmitente = nota.emit.CPF || nota.emit.CNPJ;
@@ -172,6 +180,8 @@ function Emissao({ produtor, emissor, onVerNotas, produtos, carregarProdutos, cl
       } else {
         const r = modo === 'validar' ? await api.validar(payload) : await api.emitir(payload);
         setResultado({ ...r, modo });
+        // A SEFAZ avisou que o número já era usado fora e a nota saiu com outro: o formulário mostra o real.
+        if (r.numerosPulados?.length && r.nNF) setNota((n) => ({ ...n, ide: { ...n.ide, nNF: String(r.nNF) } }));
         if (modo === 'emitir' && r.estoque) carregarProdutos(); // o saldo mudou
       }
     } catch (e) {

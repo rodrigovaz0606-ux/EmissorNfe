@@ -21,9 +21,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tower::ServiceExt;
 
-/// SEFAZ falsa: igual à simulada, mas pode rejeitar a próxima autorização.
+/// SEFAZ falsa: igual à simulada, mas pode rejeitar a próxima autorização, dizer que um número
+/// já foi usado por nota de outro sistema (539) ou deixar a conexão cair depois de receber a nota.
 struct SefazTeste {
     rejeitar_proxima: Arc<AtomicBool>,
+    ocupados: Arc<Mutex<Vec<i64>>>,
+    cair_proxima: Arc<AtomicBool>,
+}
+
+fn n_nf_do_xml(xml: &str) -> i64 {
+    let i = xml.find("<nNF>").unwrap() + 5;
+    xml[i..xml[i..].find('<').unwrap() + i].parse().unwrap()
 }
 
 impl Sefaz for SefazTeste {
@@ -31,12 +39,22 @@ impl Sefaz for SefazTeste {
         SefazSimulada.status(c, cert)
     }
     fn autorizar(&self, c: &Config, cert: &Certificado, xml: &str) -> anyhow::Result<RetAutorizacao> {
-        if !self.rejeitar_proxima.swap(false, Ordering::SeqCst) {
-            return SefazSimulada.autorizar(c, cert, xml);
+        let n = n_nf_do_xml(xml);
+        if self.cair_proxima.swap(false, Ordering::SeqCst) {
+            // A SEFAZ autorizou, mas a resposta não chegou: o número passa a estar usado.
+            self.ocupados.lock().unwrap().push(n);
+            return Err(emissor_nfe::fiscal::soap::erro_rede("Tempo esgotado (teste)"));
         }
+        let (c_stat, x_motivo) = if self.ocupados.lock().unwrap().contains(&n) {
+            ("539", format!("Rejeicao: Duplicidade de NF-e com diferenca na Chave de Acesso [chNFe: {:044}][nRec: 1]", 52_000_000 + n))
+        } else if self.rejeitar_proxima.swap(false, Ordering::SeqCst) {
+            ("225", "Rejeicao: Falha no Schema XML (teste)".to_string())
+        } else {
+            return SefazSimulada.autorizar(c, cert, xml);
+        };
         Ok(RetAutorizacao {
             lote: Lote { cStat: Some("104".into()), xMotivo: Some("Lote processado".into()), ..Default::default() },
-            protocolo: Some(Protocolo { cStat: Some("539".into()), xMotivo: Some("Rejeicao: Duplicidade (teste)".into()), ..Default::default() }),
+            protocolo: Some(Protocolo { cStat: Some(c_stat.into()), xMotivo: Some(x_motivo), ..Default::default() }),
             resposta_soap: "<x/>".into(),
             ..Default::default()
         })
@@ -55,6 +73,8 @@ impl Sefaz for SefazTeste {
 struct Api {
     app: Router,
     rejeitar: Arc<AtomicBool>,
+    ocupados: Arc<Mutex<Vec<i64>>>,
+    cair: Arc<AtomicBool>,
     /// Cookie de sessão deste "navegador".
     cookie: Mutex<Option<String>>,
 }
@@ -86,13 +106,11 @@ impl Api {
     /// Banco vazio, sem usuários (tela de configuração inicial).
     fn vazia() -> Self {
         let rejeitar = Arc::new(AtomicBool::new(false));
-        let ctx = Contexto::novo(
-            Config::teste(),
-            Repositorio::abrir(":memory:").unwrap(),
-            Box::new(SefazTeste { rejeitar_proxima: rejeitar.clone() }),
-            Cofre::de_teste(),
-        );
-        Api { app: criar_app(Arc::new(ctx), None), rejeitar, cookie: Mutex::new(None) }
+        let ocupados = Arc::new(Mutex::new(vec![]));
+        let cair = Arc::new(AtomicBool::new(false));
+        let sefaz = SefazTeste { rejeitar_proxima: rejeitar.clone(), ocupados: ocupados.clone(), cair_proxima: cair.clone() };
+        let ctx = Contexto::novo(Config::teste(), Repositorio::abrir(":memory:").unwrap(), Box::new(sefaz), Cofre::de_teste());
+        Api { app: criar_app(Arc::new(ctx), None), rejeitar, ocupados, cair, cookie: Mutex::new(None) }
     }
 
     /// Administrador logado com o produtor fictício (e-CNPJ 12345678000195) selecionado.
@@ -107,7 +125,7 @@ impl Api {
 
     /// Outro navegador, sem sessão, falando com o mesmo servidor.
     fn outro_navegador(&self) -> Api {
-        Api { app: self.app.clone(), rejeitar: self.rejeitar.clone(), cookie: Mutex::new(None) }
+        Api { app: self.app.clone(), rejeitar: self.rejeitar.clone(), ocupados: self.ocupados.clone(), cair: self.cair.clone(), cookie: Mutex::new(None) }
     }
 
     async fn chamar(&self, metodo: &str, url: &str, corpo: Option<Value>) -> Resposta {
@@ -162,7 +180,7 @@ async fn fluxo_completo() {
     api.rejeitar.store(true, Ordering::SeqCst);
     let r = api.post("/nfe/emitir", nota(1)).await.json();
     assert_eq!(r["status"], json!("rejeitada"), "{r}");
-    assert_eq!(r["protocolo"]["cStat"], json!("539"));
+    assert_eq!(r["protocolo"]["cStat"], json!("225"));
     assert_eq!(api.proximo().await, 1);
 
     // 2) autorizada: consome o número e gera nfeProc
@@ -508,6 +526,59 @@ async fn requisicao_de_outra_origem_e_recusada() {
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     let resp = api.app.clone().oneshot(pedido("/nfe/validar", "http://127.0.0.1:3335")).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+}
+
+/// Pelo domínio (Cloudflare Tunnel): Host e Origin são o domínio, chegam cf-connecting-ip,
+/// x-forwarded-for e x-forwarded-proto=https.
+fn pelo_tunel(metodo: &str, rota: &str, corpo: Value, cookie: Option<&str>) -> Request<Body> {
+    let mut r = Request::builder()
+        .method(metodo)
+        .uri(format!("/api{rota}"))
+        .header("content-type", "application/json")
+        .header("host", "sistemasvaz.com.br")
+        .header("origin", "https://sistemasvaz.com.br")
+        .header("cf-connecting-ip", "200.1.2.3")
+        .header("x-forwarded-for", "200.1.2.3")
+        .header("x-forwarded-proto", "https");
+    if let Some(c) = cookie {
+        r = r.header("cookie", c);
+    }
+    r.body(Body::from(corpo.to_string())).unwrap()
+}
+
+#[tokio::test]
+async fn pela_internet_nao_cria_administrador_e_cookie_e_seguro() {
+    // Banco novo exposto pelo túnel: ninguém de fora vira administrador.
+    let api = Api::vazia();
+    let admin = json!({ "login": "intruso", "nome": "X", "senha": "uma-senha-boa" });
+    let resp = api.app.clone().oneshot(pelo_tunel("POST", "/auth/configurar", admin, None)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert_eq!(api.get("/auth/estado").await.json()["configurado"], false);
+
+    // Criado no próprio servidor, o login pelo domínio funciona e o cookie vai só por HTTPS.
+    let r = api.post("/auth/configurar", json!({ "login": "admin", "nome": "Adm", "senha": "senha-do-admin" })).await;
+    assert_eq!(r.status, StatusCode::OK);
+    let login = json!({ "login": "admin", "senha": "senha-do-admin" });
+    let resp = api.app.clone().oneshot(pelo_tunel("POST", "/auth/entrar", login, None)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let h = resp.headers();
+    let cookie = h.get("set-cookie").unwrap().to_str().unwrap().to_string();
+    assert!(cookie.contains("HttpOnly") && cookie.contains("SameSite=Strict") && cookie.ends_with("; Secure"), "{cookie}");
+    assert_eq!(h.get("x-frame-options").unwrap(), "DENY");
+    assert_eq!(h.get("x-content-type-options").unwrap(), "nosniff");
+    assert!(h.get("strict-transport-security").is_some());
+
+    // Com a sessão, as rotas que alteram dados aceitam a origem do próprio domínio.
+    let par = cookie.split(';').next().unwrap();
+    let resp = api.app.clone().oneshot(pelo_tunel("POST", "/auth/sair", json!({}), Some(par))).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    // No acesso local (sem túnel) o cookie não leva Secure: http://localhost continua funcionando.
+    let r = api.app.clone().oneshot(
+        Request::builder().method("POST").uri("/api/auth/entrar").header("content-type", "application/json")
+            .body(Body::from(json!({ "login": "admin", "senha": "senha-do-admin" }).to_string())).unwrap(),
+    ).await.unwrap();
+    assert!(!r.headers().get("set-cookie").unwrap().to_str().unwrap().contains("Secure"));
 }
 
 #[test]
@@ -881,4 +952,95 @@ async fn emitente_cpf_usa_serie_920_a_969() {
     let r = api.post("/nfe/emitir", d).await.json();
     assert_eq!(r["status"], json!("autorizada"), "{r}");
     assert_eq!(api.get("/numeracao/920").await.json()["proximo"], json!(2));
+}
+
+async fn id_do_produtor(api: &Api) -> i64 {
+    api.get("/auth/estado").await.json()["produtor"]["id"].as_i64().unwrap()
+}
+
+#[tokio::test]
+async fn ultima_nota_emitida_fora_define_o_proximo_numero() {
+    let api = Api::nova().await;
+    let id = id_do_produtor(&api).await;
+    let n = api.get(&format!("/produtores/{id}/numeracao")).await.json();
+    assert_eq!(n["seriePadrao"], json!(1), "e-CNPJ usa a série 1");
+    assert_eq!(n["series"][0]["proximo"], json!(1));
+
+    // informada no cadastro: continua dali
+    let r = api.chamar("PUT", &format!("/produtores/{id}/numeracao"), Some(json!({ "serie": 1, "ultimo": "70" }))).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.texto());
+    assert_eq!(r.json()["series"][0]["proximo"], json!(71));
+    assert_eq!(r.json()["series"][0]["origem"], json!("cadastro"));
+    assert_eq!(api.proximo().await, 71);
+    let r = api.post("/nfe/emitir", nota(71)).await.json();
+    assert_eq!(r["status"], json!("autorizada"), "{r}");
+    assert_eq!(api.proximo().await, 72);
+
+    // valor menor que as notas do sistema não faz voltar; vazio apaga
+    api.chamar("PUT", &format!("/produtores/{id}/numeracao"), Some(json!({ "serie": 1, "ultimo": 5 }))).await;
+    assert_eq!(api.proximo().await, 72);
+    api.chamar("PUT", &format!("/produtores/{id}/numeracao"), Some(json!({ "serie": 1, "ultimo": "" }))).await;
+    assert_eq!(api.proximo().await, 72);
+    let r = api.chamar("PUT", &format!("/produtores/{id}/numeracao"), Some(json!({ "serie": 1, "ultimo": "abc" }))).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+
+    // outro usuário não mexe na numeração de produtor que não é dele
+    let r = api.post("/admin/usuarios", json!({ "login": "joao", "nome": "Joao", "senha": "senha-do-joao", "admin": false })).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.texto());
+    let joao = api.outro_navegador();
+    joao.post("/auth/entrar", json!({ "login": "joao", "senha": "senha-do-joao" })).await;
+    assert_ne!(joao.get(&format!("/produtores/{id}/numeracao")).await.status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn numero_usado_fora_do_sistema_pula_sozinho_para_o_proximo() {
+    let api = Api::nova().await;
+    let id = id_do_produtor(&api).await;
+    api.ocupados.lock().unwrap().extend([1, 2, 3]);
+
+    let r = api.post("/nfe/emitir", nota(1)).await.json();
+    assert_eq!(r["status"], json!("autorizada"), "{r}");
+    assert_eq!(r["nNF"], json!(4));
+    assert_eq!(r["numeroOriginal"], json!(1));
+    assert_eq!(r["numerosPulados"], json!([1, 2, 3]));
+    let lista = api.get("/notas").await.json();
+    assert_eq!(lista["total"], json!(1), "as tentativas recusadas por número usado não viram notas: {lista}");
+    assert_eq!(lista["notas"][0]["nNF"], json!(4));
+    assert_eq!(api.get(&format!("/notas/{}", r["id"])).await.json()["dados"]["ide"]["nNF"], json!("4"));
+    assert_eq!(api.proximo().await, 5);
+
+    // fica registrado de onde veio (com a chave que a SEFAZ citou)
+    let n = api.get(&format!("/produtores/{id}/numeracao")).await.json();
+    assert_eq!(n["series"][0]["ultimo"], json!(3));
+    assert_eq!(n["series"][0]["origem"], json!("sefaz"));
+    assert_eq!(n["series"][0]["chave"].as_str().unwrap().len(), 44);
+}
+
+#[tokio::test]
+async fn pulo_de_numero_tem_limite() {
+    let api = Api::nova().await;
+    api.ocupados.lock().unwrap().extend(1..=15);
+    let r = api.post("/nfe/emitir", nota(1)).await.json();
+    assert_eq!(r["status"], json!("rejeitada"), "{r}");
+    assert_eq!(r["numerosPulados"].as_array().unwrap().len(), emissor_nfe::emissao::MAX_PULOS_DE_NUMERO);
+    assert!(r["aviso"].as_str().unwrap().contains("Numeração"), "{r}");
+    assert_eq!(api.proximo().await, 12, "o último número recusado também fica registrado");
+}
+
+#[tokio::test]
+async fn numero_de_nota_propria_pendente_nao_e_pulado() {
+    // A conexão cai depois do envio: a SEFAZ autorizou, mas o sistema ficou com a nota "pendente".
+    let api = Api::nova().await;
+    api.cair.store(true, Ordering::SeqCst);
+    let r = api.post("/nfe/emitir", nota(1)).await;
+    assert_eq!(r.status, StatusCode::BAD_GATEWAY, "{}", r.texto());
+
+    // Emitir de novo o número 1: a SEFAZ diz 539, mas o número é da nota pendente deste sistema.
+    // Pular seria emitir a mesma venda duas vezes; o sistema para e manda consultar.
+    let r = api.post("/nfe/emitir", nota(1)).await.json();
+    assert_eq!(r["status"], json!("rejeitada"), "{r}");
+    assert!(r.get("numerosPulados").is_none(), "{r}");
+    assert!(r["aviso"].as_str().unwrap().contains("Consultar na SEFAZ"), "{r}");
+    let lista = api.get("/notas").await.json();
+    assert!(lista["notas"].as_array().unwrap().iter().all(|n| n["nNF"] == json!(1)), "{lista}");
 }

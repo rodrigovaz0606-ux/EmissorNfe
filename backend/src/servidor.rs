@@ -243,6 +243,46 @@ mod testes_origem {
     }
 }
 
+/// A requisição chegou por um proxy/túnel (Cloudflare Tunnel acrescenta esses cabeçalhos),
+/// ou seja, veio da internet e não de um navegador na própria máquina.
+pub fn veio_de_fora(headers: &HeaderMap) -> bool {
+    headers.contains_key("cf-connecting-ip") || headers.contains_key("x-forwarded-for")
+}
+
+/// Proteções para uso pela internet (atrás do túnel) que não atrapalham o uso local:
+/// - o primeiro administrador só pode ser criado no próprio servidor (senão, quem abrisse o
+///   site antes do dono viraria administrador);
+/// - cookie de sessão com `Secure` quando o acesso é por HTTPS;
+/// - cabeçalhos contra a página ser embutida em outro site e contra adivinhação de tipo.
+async fn protecoes(req: Request, next: Next) -> Response {
+    let de_fora = veio_de_fora(req.headers());
+    let https = req.headers().get("x-forwarded-proto").and_then(|v| v.to_str().ok()) == Some("https");
+    if de_fora && req.uri().path() == "/api/auth/configurar" {
+        return ErroApi(
+            StatusCode::FORBIDDEN,
+            "O primeiro administrador só pode ser criado no próprio servidor (http://localhost:3335).".into(),
+        )
+        .into_response();
+    }
+    let mut r = next.run(req).await;
+    let h = r.headers_mut();
+    if https {
+        let cookies: Vec<HeaderValue> = h.get_all(header::SET_COOKIE).iter().cloned().collect();
+        h.remove(header::SET_COOKIE);
+        for c in cookies {
+            let texto = format!("{}; Secure", c.to_str().unwrap_or_default());
+            if let Ok(v) = HeaderValue::from_str(&texto) {
+                h.append(header::SET_COOKIE, v);
+            }
+        }
+        h.insert(header::STRICT_TRANSPORT_SECURITY, HeaderValue::from_static("max-age=31536000"));
+    }
+    h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    h.insert(header::REFERRER_POLICY, HeaderValue::from_static("same-origin"));
+    r
+}
+
 async fn sem_cache(mut r: Response) -> Response {
     r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     r
@@ -352,6 +392,16 @@ async fn renovar_certificado(State(ctx): State<Ctx>, Logado(s): Logado, Path(id)
 async fn definir_emitente(State(ctx): State<Ctx>, Logado(s): Logado, Path(id): Path<String>, corpo: Bytes) -> Result<Response, ErroApi> {
     let (id, d) = (id_de(&id), corpo_json(&corpo)?);
     Ok(json_ok(bloqueante(&ctx, move |c| contas::definir_emitente(c, &s, id, &d)).await?))
+}
+
+async fn numeracao_produtor(State(ctx): State<Ctx>, Logado(s): Logado, Path(id): Path<String>) -> Result<Response, ErroApi> {
+    let id = id_de(&id);
+    Ok(json_ok(bloqueante(&ctx, move |c| contas::numeracao(c, &s, id)).await?))
+}
+
+async fn definir_numeracao(State(ctx): State<Ctx>, Logado(s): Logado, Path(id): Path<String>, corpo: Bytes) -> Result<Response, ErroApi> {
+    let (id, d) = (id_de(&id), corpo_json(&corpo)?);
+    Ok(json_ok(bloqueante(&ctx, move |c| contas::definir_numeracao(c, &s, id, &d)).await?))
 }
 
 async fn remover_produtor(State(ctx): State<Ctx>, Logado(s): Logado, Path(id): Path<String>) -> Result<Response, ErroApi> {
@@ -644,6 +694,7 @@ pub fn criar_app(ctx: Ctx, dist: Option<PathBuf>) -> Router {
         .route("/produtores/{id}", axum::routing::delete(remover_produtor))
         .route("/produtores/{id}/certificado", put(renovar_certificado))
         .route("/produtores/{id}/emitente", put(definir_emitente))
+        .route("/produtores/{id}/numeracao", get(numeracao_produtor).put(definir_numeracao))
         .route("/produtores/{id}/selecionar", post(selecionar_produtor))
         // administração
         .route("/admin/usuarios", get(usuarios).post(criar_usuario))
@@ -679,10 +730,11 @@ pub fn criar_app(ctx: Ctx, dist: Option<PathBuf>) -> Router {
         .layer(axum::middleware::from_fn(mesma_origem))
         .with_state(ctx);
     let app = Router::new().nest("/api", api);
-    match dist.filter(|d| d.join("index.html").exists()) {
+    let app = match dist.filter(|d| d.join("index.html").exists()) {
         Some(d) => app.fallback_service(ServeDir::new(&d).fallback(ServeFile::new(d.join("index.html")))),
         None => app,
-    }
+    };
+    app.layer(axum::middleware::from_fn(protecoes))
 }
 
 fn env(nome: &str) -> Option<String> {

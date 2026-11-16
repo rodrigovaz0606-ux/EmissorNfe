@@ -59,6 +59,15 @@ function Resultado({ r, onVerNotas, onNovaNota }) {
           />
         )}
       </ul>
+      {r.numerosPulados?.length > 0 && (
+        <p className="aviso-estoque alerta" data-numeracao>
+          {r.numerosPulados.length === 1 ? 'O número ' : 'Os números '}
+          {r.numerosPulados.length === 1 ? r.numerosPulados[0] : `${r.numerosPulados[0]} a ${r.numerosPulados[r.numerosPulados.length - 1]}`}
+          {r.numerosPulados.length === 1 ? ' já tinha sido usado' : ' já tinham sido usados'} fora deste sistema (a SEFAZ avisou).
+          {autorizada ? <> A nota foi emitida com o <b>nº {r.nNF}</b>.</> : null}
+        </p>
+      )}
+      {r.aviso && <p className="aviso-estoque alerta">⚠ {r.aviso}</p>}
       {r.estoque?.movimentados > 0 && <p className="aviso-estoque">Estoque atualizado em {r.estoque.movimentados} {r.estoque.movimentados === 1 ? 'produto' : 'produtos'}.</p>}
       {r.estoque?.ignorados?.map((t) => <p className="aviso-estoque alerta" key={t}>⚠ {t}</p>)}
       {r.estoque?.erro && <p className="aviso-estoque alerta">⚠ {r.estoque.erro}</p>}

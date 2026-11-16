@@ -144,7 +144,66 @@ fn inteiro(v: Option<&Value>) -> i64 {
     }
 }
 
+/// Quantas vezes a emissão pula sozinha para o próximo número quando a SEFAZ diz que o número
+/// já foi usado por uma nota emitida fora deste sistema (rejeição 539).
+pub const MAX_PULOS_DE_NUMERO: usize = 10;
+
+/// Chave citada pela SEFAZ na rejeição 539: "...[chNFe: 5226...]".
+fn chave_citada(x_motivo: &str) -> Option<String> {
+    let i = x_motivo.find("chNFe")?;
+    let digitos: String = x_motivo[i..].chars().skip_while(|c| !c.is_ascii_digit()).take_while(char::is_ascii_digit).collect();
+    (digitos.len() == 44).then_some(digitos)
+}
+
+/// Emite a nota. Se o número já tiver sido usado FORA deste sistema (a SEFAZ responde 539 e
+/// não há nota nossa com esse número), guarda o número como usado e tenta o próximo, até
+/// `MAX_PULOS_DE_NUMERO` vezes. Se o número for de uma nota nossa (ex.: ficou pendente porque a
+/// conexão caiu e a SEFAZ autorizou), NÃO pula: seria emitir a mesma venda duas vezes.
 pub fn emitir_nfe(dados: &Value, ctx: &Contexto, ativo: &Ativo) -> Result<Value> {
+    let mut dados = dados.clone();
+    let serie = inteiro(dados.pointer("/ide/serie"));
+    let n_original = inteiro(dados.pointer("/ide/nNF"));
+    let mut pulados: Vec<i64> = vec![];
+    loop {
+        let mut r = emitir_com_numero(&dados, ctx, ativo)?;
+        let n_nf = inteiro(dados.pointer("/ide/nNF"));
+        let c_stat = r.pointer("/protocolo/cStat").and_then(Value::as_str).unwrap_or("");
+        if r["status"] == json!("rejeitada") && c_stat == "539" {
+            let x_motivo = r.pointer("/protocolo/xMotivo").and_then(Value::as_str).unwrap_or("");
+            let chave = chave_citada(x_motivo);
+            let id = r["id"].as_i64().unwrap_or(-1);
+            let repo = ctx.repo();
+            if repo.numero_tem_nota_propria(ativo.id, serie, n_nf, id, chave.as_deref())? {
+                r["aviso"] = json!(format!(
+                    "A SEFAZ diz que o número {n_nf} já foi usado, e há uma nota deste sistema com esse número. \
+                     Abra a nota {n_nf} na lista e use \"Consultar na SEFAZ\" antes de emitir de novo."
+                ));
+            } else if pulados.len() < MAX_PULOS_DE_NUMERO {
+                repo.registrar_numero_externo(ativo.id, serie, n_nf, chave.as_deref())?;
+                repo.excluir_tentativa(id)?;
+                pulados.push(n_nf);
+                let proximo = repo.proximo_numero(ativo.id, serie)?.max(n_nf + 1);
+                dados["ide"]["nNF"] = json!(proximo.to_string());
+                continue;
+            } else {
+                repo.registrar_numero_externo(ativo.id, serie, n_nf, chave.as_deref())?;
+                r["aviso"] = json!(format!(
+                    "Os números {} a {n_nf} já foram usados fora deste sistema. Informe a última nota emitida fora \
+                     no cadastro do produtor (Produtores > Numeração) e emita de novo.",
+                    pulados.first().copied().unwrap_or(n_nf)
+                ));
+            }
+        }
+        if !pulados.is_empty() {
+            r["nNF"] = json!(inteiro(dados.pointer("/ide/nNF")));
+            r["numeroOriginal"] = json!(n_original);
+            r["numerosPulados"] = json!(pulados);
+        }
+        return Ok(r);
+    }
+}
+
+fn emitir_com_numero(dados: &Value, ctx: &Contexto, ativo: &Ativo) -> Result<Value> {
     let serie = inteiro(dados.pointer("/ide/serie"));
     let n_nf = inteiro(dados.pointer("/ide/nNF"));
     {

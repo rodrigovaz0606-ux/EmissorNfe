@@ -3,7 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Emissor NF-e</title>
+    <title>Sistemas Vaz · Emissor NF-e</title>
+    <meta name="application-name" content="Sistemas Vaz" />
+    <meta name="apple-mobile-web-app-title" content="Sistemas Vaz" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="theme-color" content="#0f766e" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <script>
       // Antes do primeiro desenho, para o tema escuro não piscar em branco.
       (function () {
@@ -13,7 +19,7 @@
         document.documentElement.dataset.tema = escuro ? 'escuro' : 'claro';
       })();
     </script>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%230f766e'/><text x='16' y='21' font-size='13' font-family='sans-serif' font-weight='700' fill='white' text-anchor='middle'>NF</text></svg>" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
   </head>
   <body>
     <div id="root"></div>

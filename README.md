@@ -41,6 +41,8 @@ Abra http://localhost:5175. A API (Rust) fica em http://localhost:3335 e só ace
 - **Filtros** em Notas emitidas (período, situação, número, destinatário, CPF/CNPJ ou chave)
 - **Exportar para o contador**: ZIP com os XMLs do período (notas autorizadas, canceladas e denegadas, eventos e inutilizações) e um `resumo.csv` que abre no Excel
 - Notas emitidas: DANFE em PDF, XML, carta de correção, cancelamento, consulta e inutilização
+- **Numeração**: o número da nota é puxado sozinho ao abrir a emissão, ao trocar a série e ao preencher a IE do emitente. A SEFAZ não informa a última nota de um emitente; se o produtor já emitiu notas em outro sistema, informe a última em *Produtores > Numeração* (por série) e o emissor continua dali. Se mesmo assim a SEFAZ responder que o número já foi usado (rejeição 539), o emissor guarda esse número e reenvia com o próximo, até 10 vezes, avisando qual número a nota recebeu. Ele **não** pula quando o número é de uma nota do próprio sistema (ex.: pendente porque a conexão caiu), para não emitir a mesma venda duas vezes
+- **App instalável** com o nome *Sistemas Vaz* e o ícone de nota fiscal: no Edge/Chrome, ícone de instalar na barra de endereço; no celular, "Adicionar à tela inicial"
 - Confirmações e avisos usam uma janela do próprio sistema (Sim/Não), nunca as caixas nativas do navegador
 - O rascunho e o emitente padrão ficam salvos no navegador (localStorage)
 

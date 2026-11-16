@@ -63,6 +63,8 @@ export const api = {
   adicionarProdutor: (pfx, senha, extra = {}) => post('/api/produtores', { pfx, senha, ...extra }),
   renovarCertificado: (id, pfx, senha) => put(`/api/produtores/${id}/certificado`, { pfx, senha }),
   definirEmitente: (id, emitente) => put(`/api/produtores/${id}/emitente`, emitente),
+  numeracao: (id) => chamar(`/api/produtores/${id}/numeracao`),
+  definirNumeracao: (id, serie, ultimo) => put(`/api/produtores/${id}/numeracao`, { serie, ultimo }),
   removerProdutor: (id) => apagar(`/api/produtores/${id}`),
   selecionarProdutor: (id) => post(`/api/produtores/${id}/selecionar`, {}),
 

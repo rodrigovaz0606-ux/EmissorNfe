@@ -662,4 +662,13 @@ button.indicador:hover { border-color: var(--cor); }
 .vencimento-admin { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0; }
 .vencimento-admin small.ok { color: var(--ok, #16a34a); }
 .vencimento-admin small.vence { color: var(--erro); }
+.numeracao-produtor { display: grid; gap: 10px; margin: 10px 0 4px; padding: 12px; border: 1px solid var(--borda); border-radius: 10px; background: var(--realce); }
+.numeracao-linha { display: grid; gap: 4px; }
+.numeracao-linha label { font-size: 13px; font-weight: 600; color: var(--texto); }
+.numeracao-linha small, .numeracao-produtor > small { color: var(--suave); font-size: 12.5px; }
+.numeracao-campos { display: flex; gap: 8px; align-items: center; }
+.numeracao-campos input { width: 140px; padding: 7px 10px; border: 1px solid var(--borda-forte); border-radius: 8px; background: var(--campo); color: var(--texto); font: inherit; }
+.numeracao-campos input:focus { outline: none; border-color: var(--cor); box-shadow: 0 0 0 3px var(--anel); }
+.numeracao-produtor small.ok { color: var(--ok); }
+.numeracao-produtor small.vence { color: var(--erro); }
 .faixa-simulada .btn-texto, .faixa-erro .btn-texto { margin-left: 8px; font-weight: 700; text-decoration: underline; }

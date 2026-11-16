@@ -164,6 +164,27 @@ describe('interface (Edge + SEFAZ simulada)', () => {
     await pagina.getByRole('tab', { name: 'Administração' }).waitFor();
   });
 
+  test('pode ser instalado como app "Sistemas Vaz" com o ícone da nota', async () => {
+    const manifesto = await pagina.evaluate(async () => {
+      const r = await fetch(document.querySelector('link[rel="manifest"]').href);
+      return { tipo: r.headers.get('content-type'), dados: await r.json() };
+    });
+    assert.match(manifesto.tipo, /manifest\+json|json/);
+    assert.equal(manifesto.dados.name, 'Sistemas Vaz – Emissor NF-e');
+    assert.equal(manifesto.dados.short_name, 'Sistemas Vaz');
+    for (const icone of manifesto.dados.icons) {
+      const r = await pagina.request.get(new URL(icone.src, URL_APP).href);
+      assert.equal(r.status(), 200, icone.src);
+      assert.equal(r.headers()['content-type'], 'image/png', icone.src);
+    }
+    // O próprio Edge diz se falta algo para instalar (manifesto, ícones, HTTPS/localhost...).
+    const cdp = await pagina.context().newCDPSession(pagina);
+    const { installabilityErrors } = await cdp.send('Page.getInstallabilityErrors');
+    // 'in-incognito': o contexto do teste é como uma janela anônima, onde nada se instala.
+    assert.deepEqual(installabilityErrors.filter((e) => e.errorId !== 'in-incognito'), []);
+    await cdp.detach();
+  });
+
   test('adiciona o produtor pelo certificado (senha errada é recusada)', async () => {
     const enviar = async (arquivo, senha) => {
       await pagina.getByRole('button', { name: '+ Adicionar produtor' }).click();
@@ -650,6 +671,19 @@ describe('interface (Edge + SEFAZ simulada)', () => {
     await pagina.getByRole('tab', { name: 'Produtores' }).click();
     await cartaoCpf.getByText('Em uso').waitFor();
     await print('06-produtores');
+  });
+
+  test('numeração: última nota emitida fora do sistema define a próxima ao usar o produtor', async () => {
+    const cartaoCnpj = pagina.locator('.cartao-produtor[data-documento="12345678000195"]');
+    await cartaoCnpj.getByRole('button', { name: 'Numeração' }).click();
+    const campo = cartaoCnpj.getByLabel(/Série 1 · última nota emitida fora/);
+    await campo.fill('70');
+    await cartaoCnpj.getByRole('button', { name: 'Salvar' }).click();
+    await cartaoCnpj.getByText('Série 1: a próxima nota será a nº 71.').waitFor();
+    await print('07-numeracao');
+    await cartaoCnpj.getByRole('button', { name: 'Usar este produtor' }).click();
+    await pagina.getByRole('tab', { name: 'Emitir nota' }).click();
+    await pagina.getByRole('heading', { name: /Nota fiscal nº 71\b/ }).waitFor();
   });
 
   test('administrador cria usuário; o usuário não vê os produtores do admin nem a administração', async () => {

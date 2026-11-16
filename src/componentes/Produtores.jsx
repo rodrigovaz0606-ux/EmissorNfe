@@ -106,12 +106,70 @@ function VencimentoAdmin({ produtor, onAlterado }) {
   );
 }
 
+// Numeração: a SEFAZ não informa a última nota de um emitente. Se o produtor já emitiu notas em
+// outro sistema (ou no portal), informe a última aqui e o emissor continua dali. Se mesmo assim
+// um número já estiver usado, a SEFAZ avisa na emissão e o sistema pula sozinho para o próximo.
+function NumeracaoProdutor({ produtor }) {
+  const [dados, setDados] = React.useState(null);
+  const [valores, setValores] = React.useState({});
+  const [msg, setMsg] = React.useState(null);
+  const carregar = React.useCallback(async () => {
+    try {
+      const d = await api.numeracao(produtor.id);
+      setDados(d);
+      setValores(Object.fromEntries(d.series.map((s) => [s.serie, s.ultimo ? String(s.ultimo) : ''])));
+    } catch (e) {
+      setMsg({ ok: false, texto: e.message });
+    }
+  }, [produtor.id]);
+  React.useEffect(() => { carregar(); }, [carregar]);
+
+  async function salvar(serie) {
+    try {
+      const d = await api.definirNumeracao(produtor.id, serie, valores[serie] ?? '');
+      setDados(d);
+      const s = d.series.find((x) => x.serie === serie);
+      setMsg({ ok: true, texto: `Série ${serie}: a próxima nota será a nº ${s?.proximo}.` });
+    } catch (e) {
+      setMsg({ ok: false, texto: e.message });
+    }
+  }
+
+  if (!dados) return msg ? <small className="vence">{msg.texto}</small> : null;
+  return (
+    <div className="numeracao-produtor">
+      {dados.series.map((s) => {
+        const id = `ultima-${produtor.id}-${s.serie}`;
+        const igual = (valores[s.serie] ?? '') === (s.ultimo ? String(s.ultimo) : '');
+        return (
+          <div key={s.serie} className="numeracao-linha">
+            <label htmlFor={id}>Série {s.serie} · última nota emitida fora deste sistema</label>
+            <div className="numeracao-campos">
+              <input
+                id={id} inputMode="numeric" placeholder="nenhuma" value={valores[s.serie] ?? ''}
+                onChange={(e) => setValores((v) => ({ ...v, [s.serie]: e.target.value.replace(/\D/g, '').slice(0, 9) }))}
+              />
+              <button type="button" className="btn-texto" onClick={() => salvar(s.serie)} disabled={igual}>Salvar</button>
+            </div>
+            <small>
+              Próxima nota: <b>nº {s.proximo}</b>
+              {s.origem === 'sefaz' && ` · nº ${s.ultimo} já usado fora, avisado pela SEFAZ`}
+            </small>
+          </div>
+        );
+      })}
+      {msg && <small className={msg.ok ? 'ok' : 'vence'}>{msg.texto}</small>}
+    </div>
+  );
+}
+
 export function Produtores({ usuario, produtorAtivo, onSelecionado, onAlterados, primeiraVez, mensalidadeAtiva }) {
   const [lista, setLista] = React.useState(null);
   const [erro, setErro] = React.useState('');
   const [aviso, setAviso] = React.useState(null);
   const [janela, setJanela] = React.useState(null); // { tipo: 'novo' } | { tipo: 'renovar', produtor }
   const [trocando, setTrocando] = React.useState(null);
+  const [numeracaoAberta, setNumeracaoAberta] = React.useState(null);
 
   const carregar = React.useCallback(() => api.produtores().then(setLista).catch((e) => setErro(e.message)), []);
   React.useEffect(() => { carregar(); }, [carregar]);
@@ -190,12 +248,14 @@ export function Produtores({ usuario, produtorAtivo, onSelecionado, onAlterados,
                     {mensalidadeAtiva && <div><dt>Mensalidade vence em</dt><dd>{p.pagamento_vencimento ? p.pagamento_vencimento.split('-').reverse().join('/') : 'Sem vencimento'}</dd></div>}
                   </dl>
                   {mensalidadeAtiva && usuario?.admin && <VencimentoAdmin produtor={p} onAlterado={() => { carregar(); onAlterados?.(); }} />}
+                  {numeracaoAberta === p.id && <NumeracaoProdutor produtor={p} />}
                   <div className="cartao-produtor-acoes">
                     {!ativo && (
                       <button type="button" className="btn-primario pequeno" onClick={() => selecionar(p)} disabled={trocando !== null}>
                         {trocando === p.id ? 'Abrindo…' : 'Usar este produtor'}
                       </button>
                     )}
+                    <button type="button" className="btn-texto" aria-expanded={numeracaoAberta === p.id} onClick={() => setNumeracaoAberta(numeracaoAberta === p.id ? null : p.id)}>Numeração</button>
                     <button type="button" className="btn-texto" onClick={() => { setAviso(null); setJanela({ tipo: 'renovar', produtor: p }); }}>Renovar certificado</button>
                     <button type="button" className="btn-perigo-texto" onClick={() => remover(p)}>Remover</button>
                   </div>
