@@ -386,7 +386,24 @@ export default function App() {
   const carregar = React.useCallback(() => {
     api.estado().then((e) => { setEstado(e); setErro(''); }).catch((e) => setErro(e.message));
   }, []);
-  React.useEffect(() => { carregar(); }, [carregar]);
+  React.useEffect(() => {
+    // Retorno do SaintSSO: troca o código pela sessão local e volta para a tela inicial.
+    if (location.pathname === '/callback') {
+      const p = new URLSearchParams(location.search);
+      const voltar = () => history.replaceState(null, '', '/');
+      if (p.get('error')) {
+        voltar();
+        setAvisoLogin(p.get('error') === 'access_denied' ? 'Seu pacote não inclui o Emissor NF-e ou o acesso foi negado.' : 'Não foi possível entrar pelo SaintSSO.');
+        carregar();
+        return;
+      }
+      api.ssoRetorno(p.get('code'), p.get('state'))
+        .then((e) => { voltar(); setEstado(e); setErro(''); })
+        .catch((e) => { voltar(); setAvisoLogin(e.message); carregar(); });
+      return;
+    }
+    carregar();
+  }, [carregar]);
 
   // Sessão expirada (401) → login; produtor indisponível (409) → recarrega o estado.
   React.useEffect(() => {

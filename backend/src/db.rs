@@ -194,6 +194,12 @@ CREATE INDEX ix_cobrancas_situacao ON cobrancas (situacao);
 /// Migração 5: notas que o produtor emitiu FORA deste sistema (outro emissor, portal da SEFAZ).
 /// A SEFAZ não informa a última nota de um emitente; o número vem do cadastro do produtor
 /// ("última nota emitida fora") ou da própria SEFAZ ao recusar um número já usado (539).
+/// Migração 6: usuários criados pelo login único (SaintSSO), ligados ao `sub` do SSO.
+const MIGRACAO_6: &str = "
+ALTER TABLE usuarios ADD COLUMN sso_sub TEXT;
+CREATE UNIQUE INDEX ix_usuarios_sso_sub ON usuarios (sso_sub) WHERE sso_sub IS NOT NULL;
+";
+
 const MIGRACAO_5: &str = "
 CREATE TABLE numeracao_externa (
   produtor_id   INTEGER NOT NULL REFERENCES produtores(id) ON DELETE CASCADE,
@@ -580,6 +586,9 @@ impl Repositorio {
         }
         if versao < 5 {
             db.execute_batch(&format!("BEGIN; {MIGRACAO_5} PRAGMA user_version = 5; COMMIT;"))?;
+        }
+        if versao < 6 {
+            db.execute_batch(&format!("BEGIN; {MIGRACAO_6} PRAGMA user_version = 6; COMMIT;"))?;
         }
         Ok(Repositorio { db })
     }
@@ -1128,6 +1137,18 @@ impl Repositorio {
 
     pub fn usuario_por_login(&self, login: &str) -> Result<Option<Usuario>> {
         Ok(self.db.query_row(&format!("SELECT {CAMPOS_USUARIO} FROM usuarios WHERE login = ?"), [login], usuario_de).optional()?)
+    }
+
+    pub fn usuario_por_sso(&self, sub: &str) -> Result<Option<Usuario>> {
+        Ok(self.db.query_row(&format!("SELECT {CAMPOS_USUARIO} FROM usuarios WHERE sso_sub = ?"), [sub], usuario_de).optional()?)
+    }
+
+    pub fn criar_usuario_sso(&self, login: &str, nome: &str, senha_hash: &str, sub: &str) -> Result<i64> {
+        self.db.execute(
+            "INSERT INTO usuarios (login, nome, senha_hash, admin, sso_sub) VALUES (?, ?, ?, 0, ?)",
+            params![login, nome, senha_hash, sub],
+        )?;
+        Ok(self.db.last_insert_rowid())
     }
 
     pub fn criar_usuario(&self, login: &str, nome: &str, senha_hash: &str, admin: bool) -> Result<i64> {

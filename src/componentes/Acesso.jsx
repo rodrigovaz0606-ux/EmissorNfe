@@ -39,6 +39,23 @@ export function TelaLogin({ onEntrou, aviso, ambiente }) {
   const [erro, setErro] = React.useState('');
   const [entrando, setEntrando] = React.useState(false);
 
+  const [sso, setSso] = React.useState(false);
+  React.useEffect(() => {
+    api.ssoEstado().then((r) => setSso(Boolean(r?.ativo))).catch(() => {});
+  }, []);
+
+  async function entrarComSso() {
+    setEntrando(true);
+    setErro('');
+    try {
+      const { url } = await api.ssoIniciar(`${location.origin}/callback`);
+      location.assign(url);
+    } catch (e2) {
+      setErro(e2.message);
+      setEntrando(false);
+    }
+  }
+
   async function entrar(e) {
     e.preventDefault();
     setEntrando(true);
@@ -60,6 +77,9 @@ export function TelaLogin({ onEntrou, aviso, ambiente }) {
         <CampoAcesso rotulo="Senha" type="password" value={senha} onChange={(e) => setSenha(e.target.value)} autoComplete="current-password" required />
         {erro && <div className="faixa-erro-local" role="alert">{erro}</div>}
         <button type="submit" className="btn-primario largo" disabled={entrando || !login || !senha}>{entrando ? 'Entrando…' : 'Entrar'}</button>
+        {sso && (
+          <button type="button" className="btn-secundario largo" onClick={entrarComSso} disabled={entrando}>Entrar com SaintSSO</button>
+        )}
       </form>
     </Moldura>
   );

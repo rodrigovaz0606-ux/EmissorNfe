@@ -350,6 +350,37 @@ async fn entrar(State(ctx): State<Ctx>, corpo: Bytes) -> Result<Response, ErroAp
     responder_sessao(&ctx, token).await
 }
 
+async fn sso_estado() -> Response {
+    json_ok(json!({ "ativo": crate::sso::ativo() }))
+}
+
+async fn sso_iniciar(corpo: Bytes) -> Result<Response, ErroApi> {
+    if !crate::sso::ativo() {
+        return Err(ErroApi(StatusCode::NOT_FOUND, "Login único desativado.".into()));
+    }
+    let d = corpo_json(&corpo)?;
+    let retorno = campo_texto(&d, "redirect_uri").unwrap_or_default();
+    let ok = (retorno.starts_with("http://") || retorno.starts_with("https://")) && !retorno.contains(['#', ' ']);
+    if !ok {
+        return Err(ErroApi(StatusCode::BAD_REQUEST, "Endereço de retorno inválido.".into()));
+    }
+    let url = crate::sso::iniciar(&retorno).await.map_err(|e| ErroApi(StatusCode::BAD_GATEWAY, e.to_string()))?;
+    Ok(json_ok(json!({ "url": url })))
+}
+
+async fn sso_retorno(State(ctx): State<Ctx>, corpo: Bytes) -> Result<Response, ErroApi> {
+    if !crate::sso::ativo() {
+        return Err(ErroApi(StatusCode::NOT_FOUND, "Login único desativado.".into()));
+    }
+    let d = corpo_json(&corpo)?;
+    let (code, state) = (campo_texto(&d, "code").unwrap_or_default(), campo_texto(&d, "state").unwrap_or_default());
+    let id = crate::sso::concluir(&code, &state).await.map_err(|e| ErroApi(StatusCode::UNAUTHORIZED, e.to_string()))?;
+    let token = bloqueante(&ctx, move |c| contas::entrar_sso(c, &id.sub, &id.nome, &id.email))
+        .await
+        .map_err(|e| if e.0 == StatusCode::BAD_REQUEST { ErroApi(StatusCode::UNAUTHORIZED, e.1) } else { e })?;
+    responder_sessao(&ctx, token).await
+}
+
 async fn sair(State(ctx): State<Ctx>, Logado(s): Logado) -> Result<Response, ErroApi> {
     bloqueante(&ctx, move |c| contas::sair(c, &s)).await?;
     Ok(com_cookie(StatusCode::NO_CONTENT.into_response(), None))
@@ -687,6 +718,9 @@ pub fn criar_app(ctx: Ctx, dist: Option<PathBuf>) -> Router {
         .route("/auth/estado", get(estado))
         .route("/auth/configurar", post(configurar))
         .route("/auth/entrar", post(entrar))
+        .route("/auth/sso", get(sso_estado))
+        .route("/auth/sso/iniciar", post(sso_iniciar))
+        .route("/auth/sso/retorno", post(sso_retorno))
         .route("/auth/sair", post(sair))
         .route("/auth/senha", post(trocar_senha))
         // produtores

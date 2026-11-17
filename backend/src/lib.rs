@@ -14,6 +14,7 @@ pub mod produtos;
 pub mod relatorios;
 pub mod servidor;
 pub mod simulada;
+pub mod sso;
 
 use std::path::PathBuf;
 

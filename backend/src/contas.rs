@@ -97,6 +97,31 @@ pub fn entrar(ctx: &Contexto, login: &str, senha: &str) -> Result<String> {
     }
 }
 
+/// Login único: acha o usuário pelo `sub` do SSO ou cria um (nunca administrador).
+/// O vínculo é pelo `sub`, não pelo e-mail: o SSO não verifica e-mails, então ligar por e-mail
+/// deixaria alguém assumir a conta de outra pessoa.
+pub fn entrar_sso(ctx: &Contexto, sub: &str, nome: &str, email: &str) -> Result<String> {
+    if ctx.repo().contar_usuarios()? == 0 {
+        // Sem administrador ainda: o primeiro acesso é a configuração local, nunca um usuário do SSO.
+        return Err(negocio("Configure o administrador do sistema antes de usar o login único."));
+    }
+    let existente = ctx.repo().usuario_por_sso(sub)?;
+    let id = match existente {
+        Some(u) if !u.ativo => return Err(negocio("Usuário desativado. Fale com o administrador.")),
+        Some(u) => u.id,
+        None => {
+            let aleatoria = auth::gerar_token(); // senha impossível de adivinhar: o acesso é só pelo SSO
+            let hash = auth::gerar_hash_senha(&aleatoria)?;
+            let nome: String = nome.trim().chars().take(100).collect();
+            let repo = ctx.repo();
+            let login = if !email.is_empty() && repo.usuario_por_login(email)?.is_none() { email.to_string() } else { format!("sso-{sub}") };
+            let exibido = if nome.is_empty() { login.clone() } else { nome };
+            repo.criar_usuario_sso(&login, &exibido, &hash, sub)?
+        }
+    };
+    abrir_sessao(ctx, id)
+}
+
 /// Primeira execução: cria o administrador (só funciona com o banco sem usuários).
 pub fn configurar_primeiro_admin(ctx: &Contexto, login: &str, nome: &str, senha: &str) -> Result<String> {
     let login = auth::validar_login(login)?;

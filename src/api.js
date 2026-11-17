@@ -55,6 +55,9 @@ export const api = {
   estado: () => chamar('/api/auth/estado', {}, { silencioso: true }),
   configurar: (dados) => post('/api/auth/configurar', dados, { silencioso: true }),
   entrar: (login, senha) => post('/api/auth/entrar', { login, senha }, { silencioso: true }),
+  ssoEstado: () => chamar('/api/auth/sso', {}, { silencioso: true }),
+  ssoIniciar: (redirectUri) => post('/api/auth/sso/iniciar', { redirect_uri: redirectUri }, { silencioso: true }),
+  ssoRetorno: (code, state) => post('/api/auth/sso/retorno', { code, state }, { silencioso: true }),
   sair: () => post('/api/auth/sair', {}, { silencioso: true }),
   trocarSenha: (atual, nova) => post('/api/auth/senha', { atual, nova }),
 
