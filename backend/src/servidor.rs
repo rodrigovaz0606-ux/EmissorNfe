@@ -711,6 +711,25 @@ pub fn iniciar_verificacao_pagamentos(ctx: Ctx) {
     });
 }
 
+/// Envia ao Campo Certo, a cada 30 s, as notas e cancelamentos que estão na fila.
+pub fn iniciar_envio_campo_certo(ctx: Ctx) {
+    if ctx.integracao.is_none() {
+        return;
+    }
+    tokio::spawn(async move {
+        let mut intervalo = tokio::time::interval(std::time::Duration::from_secs(30));
+        loop {
+            intervalo.tick().await;
+            let c = ctx.clone();
+            match tokio::task::spawn_blocking(move || crate::integracao::processar(&c)).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => eprintln!("[campo certo] falha ao enviar a fila: {e:#}"),
+                Err(e) => eprintln!("[campo certo] falha ao enviar a fila: {e}"),
+            }
+        }
+    });
+}
+
 /// Monta a aplicação. `dist`: pasta da interface compilada (opcional).
 pub fn criar_app(ctx: Ctx, dist: Option<PathBuf>) -> Router {
     let api = Router::new()
@@ -815,12 +834,17 @@ pub fn iniciar() -> Result<bool> {
     if let Some(p) = &ctx.pagamento {
         println!("Mensalidade por Pix ligada (R$ {},{:02} por produtor).", p.valor_centavos / 100, p.valor_centavos % 100);
     }
+    ctx.integracao = crate::integracao::carregar(env)?;
+    if let Some(i) = &ctx.integracao {
+        println!("Notas enviadas ao Campo Certo em {}", i.url);
+    }
     let ctx = Arc::new(ctx);
     let app = criar_app(ctx.clone(), Some(raiz.join("dist")));
     let _ = auth::hash_ficticio(); // prepara já (evita a primeira tentativa de login mais lenta)
 
     tokio::runtime::Runtime::new()?.block_on(async move {
-        iniciar_verificacao_pagamentos(ctx);
+        iniciar_verificacao_pagamentos(ctx.clone());
+        iniciar_envio_campo_certo(ctx);
         let ouvinte = tokio::net::TcpListener::bind(("127.0.0.1", porta)).await?;
         axum::serve(ouvinte, app)
             .with_graceful_shutdown(async {

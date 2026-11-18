@@ -7,6 +7,7 @@ pub mod danfe;
 pub mod db;
 pub mod emissao;
 pub mod estoque;
+pub mod integracao;
 pub mod exemplo;
 pub mod fiscal;
 pub mod pagamento;

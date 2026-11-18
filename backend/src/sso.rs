@@ -37,8 +37,10 @@ fn env(nome: &str, padrao: &str) -> String {
     std::env::var(nome).ok().filter(|v| !v.is_empty()).unwrap_or_else(|| padrao.to_string())
 }
 
+/// Desligado por padrão: só liga com `SSO_ENABLED=true` (e o SaintSSO no ar em `SSO_ISSUER`).
+/// Ligado sem SaintSSO, a tela de login mostraria um botão que só dá erro.
 pub fn ativo() -> bool {
-    std::env::var("SSO_ENABLED").map(|v| v != "false").unwrap_or(true)
+    std::env::var("SSO_ENABLED").is_ok_and(|v| v.trim() == "true")
 }
 
 fn emissor() -> String {

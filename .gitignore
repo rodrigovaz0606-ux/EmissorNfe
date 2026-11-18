@@ -17,3 +17,5 @@ backend/target/
 pacote/
 # raízes públicas da ICP-Brasil (ITI), embutidas para verificar o servidor da SEFAZ em produção
 !backend/src/fiscal/raizes-icp-brasil.pem
+
+ferramentas/sso-pagamentos/ajudante/target/

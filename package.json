@@ -10,7 +10,7 @@
     "dev:web": "vite",
     "build": "vite build && cargo build --release --manifest-path backend/Cargo.toml",
     "start": "cargo run -q --release --manifest-path backend/Cargo.toml -- servidor",
-    "test": "cargo test --manifest-path backend/Cargo.toml && node --test src/",
+    "test": "cargo test --manifest-path backend/Cargo.toml && node --test src/modelo.test.js",
     "e2e": "vite build && cargo build --release --manifest-path backend/Cargo.toml && node e2e/interface.test.js",
     "status": "cargo run -q --manifest-path backend/Cargo.toml -- status",
     "cert": "cargo run -q --manifest-path backend/Cargo.toml -- cert",

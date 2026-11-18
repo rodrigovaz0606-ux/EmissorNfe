@@ -200,6 +200,24 @@ ALTER TABLE usuarios ADD COLUMN sso_sub TEXT;
 CREATE UNIQUE INDEX ix_usuarios_sso_sub ON usuarios (sso_sub) WHERE sso_sub IS NOT NULL;
 ";
 
+/// Migração 7: fila de envio ao Campo Certo (pacote Pro). Cada nota autorizada e cada
+/// cancelamento de produtor com CPF entram aqui e são enviados pelo verificador em segundo plano.
+const MIGRACAO_7: &str = "
+CREATE TABLE integracao_saida (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  nota_id           INTEGER NOT NULL REFERENCES notas(id),
+  tipo              TEXT NOT NULL,                     -- nota | cancelamento
+  situacao          TEXT NOT NULL DEFAULT 'pendente',  -- pendente | enviada | ignorada
+  tentativas        INTEGER NOT NULL DEFAULT 0,
+  proxima_tentativa INTEGER NOT NULL DEFAULT 0,        -- Unix (segundos)
+  resultado         TEXT,                              -- resposta do Campo Certo ou motivo
+  criada_em         TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+  enviada_em        TEXT,
+  UNIQUE (nota_id, tipo)
+);
+CREATE INDEX ix_integracao_pendentes ON integracao_saida (situacao, proxima_tentativa);
+";
+
 const MIGRACAO_5: &str = "
 CREATE TABLE numeracao_externa (
   produtor_id   INTEGER NOT NULL REFERENCES produtores(id) ON DELETE CASCADE,
@@ -218,6 +236,20 @@ pub const ESCALA_ESTOQUE: f64 = 10_000.0;
 /// Números "consumidos": notas que a SEFAZ registrou (autorizadas, canceladas, denegadas)
 /// e faixas inutilizadas. Número de nota rejeitada pode ser reutilizado.
 const STATUS_QUE_CONSOMEM: &str = "('autorizada', 'cancelada', 'denegada')";
+
+/// Envio pendente ao Campo Certo, com o que vai no pedido.
+#[derive(Debug, Clone)]
+pub struct ItemIntegracao {
+    pub id: i64,
+    pub tipo: String,
+    pub tentativas: i64,
+    pub chave: String,
+    pub xml_proc: Option<String>,
+    pub documento: String,
+    pub titular: String,
+    /// `sub` do SaintSSO do dono do produtor (conta = empresa no Campo Certo).
+    pub conta: Option<String>,
+}
 
 #[derive(Debug, Clone)]
 pub struct Nota {
@@ -590,6 +622,9 @@ impl Repositorio {
         if versao < 6 {
             db.execute_batch(&format!("BEGIN; {MIGRACAO_6} PRAGMA user_version = 6; COMMIT;"))?;
         }
+        if versao < 7 {
+            db.execute_batch(&format!("BEGIN; {MIGRACAO_7} PRAGMA user_version = 7; COMMIT;"))?;
+        }
         Ok(Repositorio { db })
     }
 
@@ -653,6 +688,7 @@ impl Repositorio {
         let tem_proc = m.get("tem_proc").and_then(Value::as_i64) == Some(1);
         m.insert("tem_proc".into(), Value::Bool(tem_proc));
         m.insert("eventos".into(), Value::Array(self.eventos_da_nota(id)?));
+        m.insert("campoCerto".into(), Value::Array(self.integracao_da_nota(id)?));
         Ok(Some(Value::Object(m)))
     }
 
@@ -790,6 +826,74 @@ impl Repositorio {
             )
             .optional()?
             .is_some())
+    }
+
+    // ---------- integração com o Campo Certo ----------
+
+    /// Coloca na fila (uma vez por nota e tipo). Só produtor com CPF: o Campo Certo é de pessoa física.
+    pub fn enfileirar_integracao(&self, nota_id: i64, tipo: &str) -> Result<()> {
+        self.db.execute(
+            "INSERT OR IGNORE INTO integracao_saida (nota_id, tipo)
+             SELECT n.id, ?2 FROM notas n JOIN produtores p ON p.id = n.produtor_id WHERE n.id = ?1 AND length(p.documento) = 11",
+            params![nota_id, tipo],
+        )?;
+        Ok(())
+    }
+
+    /// Pendentes na vez, na ordem em que entraram. O cancelamento só sai depois de a nota ter
+    /// sido entregue (senão o Campo Certo receberia a nota depois e ela ficaria lá).
+    pub fn integracao_pendentes(&self, agora: i64, limite: i64) -> Result<Vec<ItemIntegracao>> {
+        let mut st = self.db.prepare(
+            "SELECT s.id, s.tipo, s.tentativas, n.chave, n.xml_proc, p.documento, p.titular, u.sso_sub
+             FROM integracao_saida s
+             JOIN notas n ON n.id = s.nota_id
+             JOIN produtores p ON p.id = n.produtor_id
+             LEFT JOIN usuarios u ON u.id = p.dono_id
+             WHERE s.situacao = 'pendente' AND s.proxima_tentativa <= ?1
+               AND NOT (s.tipo = 'cancelamento' AND EXISTS (
+                 SELECT 1 FROM integracao_saida a WHERE a.nota_id = s.nota_id AND a.tipo = 'nota' AND a.situacao = 'pendente'))
+             ORDER BY s.id LIMIT ?2",
+        )?;
+        let v = st
+            .query_map(params![agora, limite], |r| {
+                Ok(ItemIntegracao {
+                    id: r.get(0)?,
+                    tipo: r.get(1)?,
+                    tentativas: r.get(2)?,
+                    chave: r.get(3)?,
+                    xml_proc: r.get(4)?,
+                    documento: r.get(5)?,
+                    titular: r.get(6)?,
+                    conta: r.get(7)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(v)
+    }
+
+    pub fn integracao_concluida(&self, id: i64, situacao: &str, resultado: &str) -> Result<()> {
+        self.db.execute(
+            "UPDATE integracao_saida SET situacao = ?2, resultado = ?3, tentativas = tentativas + 1,
+               enviada_em = datetime('now', 'localtime') WHERE id = ?1",
+            params![id, situacao, resultado],
+        )?;
+        Ok(())
+    }
+
+    pub fn integracao_reagendar(&self, id: i64, proxima: i64, resultado: &str) -> Result<()> {
+        self.db.execute(
+            "UPDATE integracao_saida SET tentativas = tentativas + 1, proxima_tentativa = ?2, resultado = ?3 WHERE id = ?1",
+            params![id, proxima, resultado],
+        )?;
+        Ok(())
+    }
+
+    /// Situação do envio ao Campo Certo, por tipo, para mostrar na nota.
+    pub fn integracao_da_nota(&self, nota_id: i64) -> Result<Vec<Value>> {
+        self.linhas(
+            "SELECT tipo, situacao, tentativas, resultado, enviada_em FROM integracao_saida WHERE nota_id = ? ORDER BY id",
+            [nota_id],
+        )
     }
 
     /// Apaga a tentativa recusada por número já usado (não é uma nota: o número era de outra).

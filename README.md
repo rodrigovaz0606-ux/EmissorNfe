@@ -56,6 +56,16 @@ Para usar sem o Vite (interface já compilada servida pelo próprio backend): `n
 - **Segurança:** as senhas são guardadas como hash Argon2id. A sessão fica num cookie `HttpOnly` + `SameSite=Strict` e expira após 8 horas sem uso. Depois de 5 senhas erradas, o login fica bloqueado por 5 minutos. Pedidos de alteração vindos de outros sites são recusados. O .pfx e a senha de cada produtor são guardados **cifrados (AES-256-GCM)** com a chave-mestra, que fica em `NFE_CHAVE_MESTRA` ou no arquivo `chave-mestra.key`, ao lado do banco e criado na primeira execução. **Faça backup da chave junto com o banco:** sem ela, os certificados guardados não abrem.
 - Bancos de antes do login são migrados automaticamente: ao cadastrar o produtor com o mesmo documento do emitente, as notas antigas passam a ser dele.
 
+## Integração com o Campo Certo (pacote Pro)
+
+Com `CAMPO_CERTO_URL` e `INTEGRACAO_EMISSOR_SEGREDO` no `.env` (o mesmo segredo no Campo Certo), cada nota **autorizada** e cada **cancelamento** de produtor com CPF vão sozinhos para o Campo Certo do mesmo servidor:
+
+- A nota entra numa fila no banco na hora da autorização e é enviada em segundo plano (a cada 30 s). Se o Campo Certo estiver fora do ar, tenta de novo mais tarde (1 min, 2 min, 4 min... até 6 h): nada se perde. O cancelamento só sai depois de a nota ter sido entregue.
+- No Campo Certo, a nota entra como **saída** do produtor (mesmo importador do envio de XML: ignora repetidas e acha a **fazenda pela IE** do emitente). O cancelamento exclui a nota da conferência.
+- De quem é a nota: pela conta do login único (SaintSSO). A conta é uma empresa no Campo Certo e um usuário aqui; o produtor é criado lá se ainda não existir. Usuário local (sem SaintSSO): vai para a única empresa do Campo Certo que tiver o produtor com aquele CPF.
+- Segurança: só `http://127.0.0.1` ou `http://localhost` (a conversa nunca sai do servidor), pedidos assinados com HMAC-SHA256 e recusados se chegarem pelo túnel.
+- O detalhe da nota mostra a situação do envio ("Campo Certo: enviada em ...").
+
 ## Mensalidade (Pix pelo GatewayRR)
 
 Desligada por padrão. Com `API_PAGAMENTO=true` no `.env`, cada produtor paga uma mensalidade por Pix, cobrada pelo [GatewayRR](https://github.com/limiticel/GatewayRR):

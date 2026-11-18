@@ -75,6 +75,7 @@ struct Api {
     rejeitar: Arc<AtomicBool>,
     ocupados: Arc<Mutex<Vec<i64>>>,
     cair: Arc<AtomicBool>,
+    ctx: Arc<Contexto>,
     /// Cookie de sessão deste "navegador".
     cookie: Mutex<Option<String>>,
 }
@@ -105,12 +106,18 @@ fn envio_pfx(pfx: &[u8], senha: &str) -> Value {
 impl Api {
     /// Banco vazio, sem usuários (tela de configuração inicial).
     fn vazia() -> Self {
+        Api::vazia_com(None)
+    }
+
+    fn vazia_com(integracao: Option<emissor_nfe::integracao::Integracao>) -> Self {
         let rejeitar = Arc::new(AtomicBool::new(false));
         let ocupados = Arc::new(Mutex::new(vec![]));
         let cair = Arc::new(AtomicBool::new(false));
         let sefaz = SefazTeste { rejeitar_proxima: rejeitar.clone(), ocupados: ocupados.clone(), cair_proxima: cair.clone() };
-        let ctx = Contexto::novo(Config::teste(), Repositorio::abrir(":memory:").unwrap(), Box::new(sefaz), Cofre::de_teste());
-        Api { app: criar_app(Arc::new(ctx), None), rejeitar, ocupados, cair, cookie: Mutex::new(None) }
+        let mut ctx = Contexto::novo(Config::teste(), Repositorio::abrir(":memory:").unwrap(), Box::new(sefaz), Cofre::de_teste());
+        ctx.integracao = integracao;
+        let ctx = Arc::new(ctx);
+        Api { app: criar_app(ctx.clone(), None), rejeitar, ocupados, cair, ctx, cookie: Mutex::new(None) }
     }
 
     /// Administrador logado com o produtor fictício (e-CNPJ 12345678000195) selecionado.
@@ -125,7 +132,7 @@ impl Api {
 
     /// Outro navegador, sem sessão, falando com o mesmo servidor.
     fn outro_navegador(&self) -> Api {
-        Api { app: self.app.clone(), rejeitar: self.rejeitar.clone(), ocupados: self.ocupados.clone(), cair: self.cair.clone(), cookie: Mutex::new(None) }
+        Api { app: self.app.clone(), rejeitar: self.rejeitar.clone(), ocupados: self.ocupados.clone(), cair: self.cair.clone(), ctx: self.ctx.clone(), cookie: Mutex::new(None) }
     }
 
     async fn chamar(&self, metodo: &str, url: &str, corpo: Option<Value>) -> Resposta {
@@ -1043,4 +1050,93 @@ async fn numero_de_nota_propria_pendente_nao_e_pulado() {
     assert!(r["aviso"].as_str().unwrap().contains("Consultar na SEFAZ"), "{r}");
     let lista = api.get("/notas").await.json();
     assert!(lista["notas"].as_array().unwrap().iter().all(|n| n["nNF"] == json!(1)), "{lista}");
+}
+
+
+/// Campo Certo falso: guarda os pedidos e responde com o status da vez (padrão 201).
+#[derive(Clone, Default)]
+struct CampoCertoFalso {
+    recebidos: Arc<Mutex<Vec<(Value, i64, String)>>>,
+    respostas: Arc<Mutex<Vec<u16>>>,
+}
+
+impl emissor_nfe::integracao::Envio for CampoCertoFalso {
+    fn enviar(&self, url: &str, corpo: &[u8], hora: i64, assinatura: &str) -> anyhow::Result<(u16, String)> {
+        assert_eq!(url, "http://127.0.0.1:3333/api/integracao/emissor");
+        let status = { let mut r = self.respostas.lock().unwrap(); if r.is_empty() { 201 } else { r.remove(0) } };
+        if status == 0 {
+            anyhow::bail!("conexão recusada");
+        }
+        self.recebidos.lock().unwrap().push((serde_json::from_slice(corpo).unwrap(), hora, assinatura.to_string()));
+        Ok((status, json!({ "resultado": if status < 300 { "importada" } else { "erro" } }).to_string()))
+    }
+}
+
+const SEGREDO_TESTE: &str = "segredo-de-teste-da-integracao-0123456789";
+
+#[tokio::test]
+async fn notas_do_produtor_cpf_vao_para_o_campo_certo_com_cancelamento() {
+    let falso = CampoCertoFalso::default();
+    let integ = emissor_nfe::integracao::Integracao::nova("http://127.0.0.1:3333", SEGREDO_TESTE, Box::new(falso.clone())).unwrap();
+    let api = Api::vazia_com(Some(integ));
+    api.post("/auth/configurar", json!({ "login": "admin", "nome": "Administrador", "senha": "senha-do-admin" })).await;
+    api.post("/produtores", envio_pfx(PFX_CNPJ, "teste")).await; // CNPJ: o Campo Certo não recebe
+    let r = api.post("/nfe/emitir", nota(1)).await.json();
+    assert_eq!(r["status"], json!("autorizada"));
+    api.post("/produtores", envio_pfx(PFX_CPF, "teste")).await; // e-CPF fictício, já selecionado
+    let mut d = serde_json::to_value(venda_soja("52998224725", "PRODUTOR TESTE")).unwrap();
+    d["ide"]["serie"] = json!(920);
+    let r = api.post("/nfe/emitir", d).await.json();
+    assert_eq!(r["status"], json!("autorizada"), "{r}");
+    let id = r["id"].as_i64().unwrap();
+    let chave = r["chave"].as_str().unwrap().to_string();
+
+    // Campo Certo fora do ar na primeira tentativa: nada se perde, fica para depois.
+    falso.respostas.lock().unwrap().push(0);
+    let processar = |api: &Api| emissor_nfe::integracao::processar(&api.ctx).unwrap();
+    assert_eq!(processar(&api), 0);
+    let det = api.get(&format!("/notas/{id}")).await.json();
+    assert_eq!(det["campoCerto"][0]["situacao"], json!("pendente"), "{det}");
+    assert!(det["campoCerto"][0]["resultado"].as_str().unwrap().contains("sem resposta"));
+    assert_eq!(processar(&api), 0, "só tenta de novo depois da espera");
+
+    // Na vez seguinte (espera vencida), entrega a nota com o XML autorizado e a assinatura.
+    api.ctx.repo().integracao_reagendar(1, 0, "teste: antecipa").unwrap();
+    // O cancelamento entra na fila, mas só sai depois da nota.
+    let canc = api.post(&format!("/notas/{id}/cancelar"), json!({ "xJust": "Cancelamento de teste automatizado" })).await.json();
+    assert_eq!(canc["registrado"], json!(true), "{canc}");
+    assert_eq!(processar(&api), 1, "primeiro só a nota");
+    assert_eq!(processar(&api), 1, "na rodada seguinte, o cancelamento");
+    let recebidos = falso.recebidos.lock().unwrap().clone();
+    assert_eq!(recebidos.len(), 2, "a nota do CNPJ não foi enviada");
+    let (nota_env, hora, assinatura) = &recebidos[0];
+    assert_eq!(nota_env["tipo"], json!("nota"));
+    assert_eq!(nota_env["chave"], json!(chave));
+    assert_eq!(nota_env["produtor"]["documento"], json!("52998224725"));
+    assert_eq!(nota_env["conta"], Value::Null, "usuário local, sem conta do SaintSSO");
+    let xml = nota_env["xml"].as_str().unwrap();
+    assert!(xml.starts_with("<?xml") && xml.contains("<nfeProc ") && xml.contains("<protNFe"), "vai o XML autorizado");
+    let corpo = serde_json::to_vec(nota_env).unwrap();
+    assert_eq!(assinatura, &emissor_nfe::integracao::assinar(SEGREDO_TESTE, *hora, &corpo));
+    assert_eq!(recebidos[1].0["tipo"], json!("cancelamento"));
+    assert!(recebidos[1].0.get("xml").is_none());
+    let det = api.get(&format!("/notas/{id}")).await.json();
+    assert!(det["campoCerto"].as_array().unwrap().iter().all(|i| i["situacao"] == json!("enviada")), "{det}");
+    assert_eq!(processar(&api), 0, "nada mais na fila");
+}
+
+#[tokio::test]
+async fn recusa_definitiva_do_campo_certo_nao_repete() {
+    let falso = CampoCertoFalso::default();
+    let integ = emissor_nfe::integracao::Integracao::nova("http://127.0.0.1:3333", SEGREDO_TESTE, Box::new(falso.clone())).unwrap();
+    let api = Api::vazia_com(Some(integ));
+    api.post("/auth/configurar", json!({ "login": "admin", "nome": "Administrador", "senha": "senha-do-admin" })).await;
+    api.post("/produtores", envio_pfx(PFX_CPF, "teste")).await;
+    let mut d = serde_json::to_value(venda_soja("52998224725", "PRODUTOR TESTE")).unwrap();
+    d["ide"]["serie"] = json!(920);
+    let id = api.post("/nfe/emitir", d).await.json()["id"].as_i64().unwrap();
+    falso.respostas.lock().unwrap().push(422);
+    assert_eq!(emissor_nfe::integracao::processar(&api.ctx).unwrap(), 0);
+    let det = api.get(&format!("/notas/{id}")).await.json();
+    assert_eq!(det["campoCerto"][0]["situacao"], json!("ignorada"), "{det}");
 }

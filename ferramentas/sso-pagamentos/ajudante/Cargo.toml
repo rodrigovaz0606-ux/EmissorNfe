@@ -1,0 +1,20 @@
+[package]
+name = "ajudante-sso"
+version = "0.1.0"
+edition = "2024"
+description = "Ajudante da instalação do SaintSSO + GatewayRR no servidor Windows (sem Node, sem psql)"
+publish = false
+
+[dependencies]
+anyhow = "1"
+base64 = "0.22"
+ed25519-dalek = "2"
+getrandom = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking", "json", "cookies"] }
+serde_json = "1"
+sha2 = "0.10"
+sqlx = { version = "0.9", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls-ring-webpki"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[profile.release]
+strip = true

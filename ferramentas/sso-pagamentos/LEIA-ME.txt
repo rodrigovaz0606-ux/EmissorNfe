@@ -1,0 +1,47 @@
+LOGIN ÚNICO (SaintSSO) + PAGAMENTOS (GatewayRR) NO SERVIDOR — sistemasvaz.com.br
+===============================================================================
+
+Roda no mesmo PC servidor do Campo Certo e do Emissor, sem Docker: os programas viram tarefas
+do Windows e são publicados pelo túnel da Cloudflare que já existe. Os bancos ficam no Neon.
+
+ANTES DE COMEÇAR
+- Dois projetos no Neon (neon.tech, plano gratuito): um para os PAGAMENTOS e outro para o LOGIN
+  ÚNICO. De cada um, copie a "connection string" (pode ser a que o Neon mostra; o instalador já
+  troca para a conexão direta e para sslmode=verify-full).
+- Conta no Asaas e a chave de API de SANDBOX (começa com $aact_hmlg_).
+- O e-mail que será o administrador do login único.
+- O Emissor e o Campo Certo já atualizados neste servidor (versões com o login único).
+
+PASSO 1 — INSTALAR SSO E PAGAMENTOS.cmd (dois cliques, aceite a permissão de administrador)
+  Ele pede as duas conexões do Neon, a chave do Asaas e o e-mail do administrador (o que você
+  digita não aparece na tela). Gera sozinho todas as outras chaves, prepara os bancos, liga os
+  dois serviços e coloca sso.sistemasvaz.com.br e pagamentos.sistemasvaz.com.br no túnel.
+  No fim mostra 3 passos:
+   a) Cloudflare > sistemasvaz.com.br > DNS: registros "sso" e "pagamentos" do tipo Tunnel
+      (campo-certo-servidor), iguais aos do sistemasvaz.
+   b) Asaas (sandbox) > Integrações > Webhooks: URL https://pagamentos.sistemasvaz.com.br/v1/webhooks/pix
+      e o token, que o instalador já deixa copiado (Ctrl+V no campo).
+   c) Abrir https://sso.sistemasvaz.com.br/register e criar a conta com o e-mail do administrador.
+
+PASSO 2 — LIGAR SISTEMAS.cmd
+  Pede a senha do administrador do login único, cadastra o Emissor e o Campo Certo no SSO e grava
+  os segredos direto na configuração deles (sem mostrar), liga a integração das notas
+  Emissor -> Campo Certo e reinicia os dois. Pode rodar de novo quando precisar (gera segredos novos).
+
+TESTE (sandbox, seção 6 do roteiro)
+  Crie um usuário em https://sso.sistemasvaz.com.br, escolha um pacote, gere o Pix e confirme o
+  pagamento no painel sandbox do Asaas. A tela mostra "Pagamento confirmado" e o pacote fica ativo.
+  Depois entre no Emissor (https://sistemasvaz.com.br) com "Entrar com SaintSSO".
+  Só troque para o Asaas de produção depois de alinhar com quem cuida do GatewayRR.
+
+ONDE FICA CADA COISA
+  C:\ProgramData\SistemasVaz\sso         SaintSSO (porta 8090, só local)
+  C:\ProgramData\SistemasVaz\pagamentos  GatewayRR (porta 8091, só local)
+  C:\ProgramData\SistemasVaz\config      configuração com as chaves (só SYSTEM e administradores leem)
+  C:\ProgramData\SistemasVaz\sso\dados   chave que assina os logins: FAÇA BACKUP dela (se perder,
+                                         todos precisam entrar de novo)
+  C:\ProgramData\SistemasVaz\logs       registros dos dois serviços (para investigar erros)
+  Tarefas do Windows: SistemasVazSSO e SistemasVazPagamentos.
+
+ATUALIZAR: extraia o pacote novo e rode INSTALAR SSO E PAGAMENTOS.cmd de novo. Chaves, bancos e
+configuração são mantidos; só os programas mudam (e o banco dos pagamentos é atualizado).

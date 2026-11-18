@@ -672,3 +672,4 @@ button.indicador:hover { border-color: var(--cor); }
 .numeracao-produtor small.ok { color: var(--ok); }
 .numeracao-produtor small.vence { color: var(--erro); }
 .faixa-simulada .btn-texto, .faixa-erro .btn-texto { margin-left: 8px; font-weight: 700; text-decoration: underline; }
+.campo-certo-envio { display: block; }

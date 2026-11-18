@@ -78,6 +78,8 @@ pub struct Contexto {
     pub tentativas: Tentativas,
     /// Mensalidade por Pix (`None` = desligada, API_PAGAMENTO=false).
     pub pagamento: Option<crate::pagamento::Pagamento>,
+    /// Envio das notas ao Campo Certo (`None` = desligado, sem CAMPO_CERTO_URL).
+    pub integracao: Option<crate::integracao::Integracao>,
 }
 
 impl Contexto {
@@ -90,6 +92,7 @@ impl Contexto {
             certificados: Mutex::new(HashMap::new()),
             tentativas: Tentativas::default(),
             pagamento: None,
+            integracao: None,
         }
     }
 
@@ -267,6 +270,7 @@ fn emitir_com_numero(dados: &Value, ctx: &Contexto, ativo: &Ativo) -> Result<Val
 
     // A nota já está autorizada: falha no estoque vira aviso, nunca erro da emissão.
     if status == "autorizada" {
+        crate::integracao::enfileirar(ctx, id, "nota");
         resposta["estoque"] = crate::estoque::movimentar_por_nota(ctx, ativo, id, dados).unwrap_or_else(|e| {
             eprintln!("[estoque] nota {id}: {e:#}");
             json!({ "erro": "A nota foi autorizada, mas o estoque não foi atualizado. Confira e ajuste o saldo." })
@@ -334,6 +338,7 @@ pub fn cancelar_nota(id: i64, x_just: Option<String>, ctx: &Contexto, ativo: &At
     let mut r = registrar_evento(TipoEvento::Cancelamento, &nota, dados, texto, ctx, ativo)?;
     if r["registrado"] == json!(true) {
         ctx.repo().marcar_cancelada(nota.id)?;
+        crate::integracao::enfileirar(ctx, nota.id, "cancelamento");
         r["estoque"] = crate::estoque::estornar_nota(ctx, ativo, nota.id).unwrap_or_else(|e| {
             eprintln!("[estoque] estorno da nota {}: {e:#}", nota.id);
             json!({ "erro": "A nota foi cancelada, mas o estoque não foi devolvido. Confira e ajuste o saldo." })

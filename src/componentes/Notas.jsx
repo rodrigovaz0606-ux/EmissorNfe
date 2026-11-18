@@ -84,6 +84,12 @@ function DetalheNota({ id, onFechar, onAlterada, onDuplicar }) {
         <dt>SEFAZ</dt><dd>{nota.cStat} — {nota.xMotivo}</dd>
         {nota.nProt && (<><dt>Protocolo</dt><dd>{nota.nProt} · {nota.dhRecbto}</dd></>)}
         <dt>Gravada em</dt><dd>{dataHora(nota.criada_em)}</dd>
+        {nota.campoCerto?.length > 0 && (<><dt>Campo Certo</dt><dd data-campo-certo>{nota.campoCerto.map((i) => (
+          <span key={i.tipo} className="campo-certo-envio">
+            {i.tipo === 'cancelamento' ? 'Cancelamento: ' : 'Nota: '}
+            {i.situacao === 'enviada' ? `enviada em ${dataHora(i.enviada_em)}` : i.situacao === 'ignorada' ? `não enviada (${i.resultado})` : 'na fila para envio'}
+          </span>
+        ))}</dd></>)}
       </dl>
 
       {aviso && <div className={`aviso-local ${aviso.ok ? 'ok' : 'falha'}`}>{aviso.texto}</div>}
