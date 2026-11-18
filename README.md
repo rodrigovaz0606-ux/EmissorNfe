@@ -65,6 +65,8 @@ Com `CAMPO_CERTO_URL` e `INTEGRACAO_EMISSOR_SEGREDO` no `.env` (o mesmo segredo 
 - De quem é a nota: pela conta do login único (SaintSSO). A conta é uma empresa no Campo Certo e um usuário aqui; o produtor é criado lá se ainda não existir. Usuário local (sem SaintSSO): vai para a única empresa do Campo Certo que tiver o produtor com aquele CPF.
 - Segurança: só `http://127.0.0.1` ou `http://localhost` (a conversa nunca sai do servidor), pedidos assinados com HMAC-SHA256 e recusados se chegarem pelo túnel.
 - O detalhe da nota mostra a situação do envio ("Campo Certo: enviada em ...").
+- **Produtores:** o produtor com CPF cadastrado aqui aparece no Campo Certo na hora (nome, CPF e endereço do emitente padrão). Se já existir lá, só os campos vazios são completados: o cadastro principal é o do Campo Certo. A aba Produtores mostra "Campo Certo: Cadastrado".
+- **Fazendas:** na emissão, a lista "Fazenda (Campo Certo)" no emitente preenche a IE e o endereço (com o município IBGE) a partir da fazenda cadastrada lá. Com uma fazenda só, já vem preenchido.
 
 ## Mensalidade (Pix pelo GatewayRR)
 

@@ -1,6 +1,6 @@
 import React from 'react';
 import { api, EVENTO_SESSAO } from './api.js';
-import { notaVazia, totaisNota, pendencias, avisos, avisosEstoque, paraPayload, notaDoPayload, digitos, serieAdequada, serieSugerida } from './modelo.js';
+import { notaVazia, totaisNota, pendencias, avisos, avisosEstoque, paraPayload, notaDoPayload, digitos, serieAdequada, serieSugerida, emitenteDaFazenda } from './modelo.js';
 import { Identificacao } from './componentes/Identificacao.jsx';
 import { Emitente } from './componentes/Emitente.jsx';
 import { Destinatario } from './componentes/Destinatario.jsx';
@@ -102,6 +102,26 @@ function Emissao({ produtor, emissor, onVerNotas, produtos, carregarProdutos, cl
     setNota((n) => comCaminho(n, caminho, valor));
     setResultado(null);
     if (caminho[0] === 'emit') setEmitenteSalvo(false);
+  }, []);
+
+  // Fazendas do produtor no Campo Certo (só com a integração ligada). Com uma única fazenda e a IE
+  // ainda vazia, já preenche sozinho.
+  const [fazendas, setFazendas] = React.useState(null);
+  React.useEffect(() => {
+    let vivo = true;
+    api.fazendasCampoCerto()
+      .then((r) => {
+        if (!vivo || !r?.ligada) return;
+        setFazendas(r.fazendas);
+        if (r.fazendas.length === 1) setNota((n) => (digitos(n.emit.IE) ? n : { ...n, emit: emitenteDaFazenda(n.emit, r.fazendas[0]) }));
+      })
+      .catch(() => {}); // Campo Certo fora do ar: o emitente continua sendo digitado como antes
+    return () => { vivo = false; };
+  }, [produtor.id]);
+  const escolherFazenda = React.useCallback((f) => {
+    setNota((n) => ({ ...n, emit: emitenteDaFazenda(n.emit, f) }));
+    setResultado(null);
+    setEmitenteSalvo(false);
   }, []);
 
   // Rascunho salvo automaticamente no navegador.
@@ -248,7 +268,10 @@ function Emissao({ produtor, emissor, onVerNotas, produtos, carregarProdutos, cl
       <main className="conteudo">
         <div className="formulario">
           <Identificacao nota={nota} set={set} onSerie={(s) => sugerirNumero(s, true)} />
-          <Emitente nota={nota} set={set} certificado={emissor?.certificado} onSalvarPadrao={salvarEmitentePadrao} salvo={emitenteSalvo} />
+          <Emitente
+            nota={nota} set={set} certificado={emissor?.certificado} onSalvarPadrao={salvarEmitentePadrao} salvo={emitenteSalvo}
+            fazendas={fazendas} onFazenda={escolherFazenda}
+          />
           <Destinatario nota={nota} set={set} homologacao={homologacao} clientes={clientes} onSalvarCliente={salvarCliente} />
           <Itens nota={nota} set={set} produtos={produtos} onSalvarProduto={salvarProduto} />
           <Pagamento nota={nota} set={set} vNF={totais.vNF} />

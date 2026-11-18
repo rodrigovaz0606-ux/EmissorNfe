@@ -28,7 +28,7 @@ impl fmt::Display for ErroNegocio {
 
 impl std::error::Error for ErroNegocio {}
 
-fn negocio(msg: impl Into<String>) -> anyhow::Error {
+pub fn negocio(msg: impl Into<String>) -> anyhow::Error {
     anyhow::Error::new(ErroNegocio(msg.into()))
 }
 

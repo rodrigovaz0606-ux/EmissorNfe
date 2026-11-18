@@ -245,6 +245,7 @@ export function Produtores({ usuario, produtorAtivo, onSelecionado, onAlterados,
                     <div><dt>Notas</dt><dd>{p.notas}</dd></div>
                     {usuario?.admin && <div><dt>Cadastrado por</dt><dd>{p.dono_nome ?? '—'}</dd></div>}
                     {p.emitente?.IE && <div><dt>Inscrição estadual</dt><dd>{p.emitente.IE}</dd></div>}
+                    {p.campo_certo && <div><dt>Campo Certo</dt><dd className={p.campo_certo === 'ignorado' ? 'vence' : ''}>{{ enviado: '✓ Cadastrado', pendente: 'Enviando…', ignorado: 'Não enviado' }[p.campo_certo] ?? p.campo_certo}</dd></div>}
                     {mensalidadeAtiva && <div><dt>Mensalidade vence em</dt><dd>{p.pagamento_vencimento ? p.pagamento_vencimento.split('-').reverse().join('/') : 'Sem vencimento'}</dd></div>}
                   </dl>
                   {mensalidadeAtiva && usuario?.admin && <VencimentoAdmin produtor={p} onAlterado={() => { carregar(); onAlterados?.(); }} />}

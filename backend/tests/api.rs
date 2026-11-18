@@ -1058,10 +1058,21 @@ async fn numero_de_nota_propria_pendente_nao_e_pulado() {
 struct CampoCertoFalso {
     recebidos: Arc<Mutex<Vec<(Value, i64, String)>>>,
     respostas: Arc<Mutex<Vec<u16>>>,
+    produtores: Arc<Mutex<Vec<Value>>>,
 }
 
 impl emissor_nfe::integracao::Envio for CampoCertoFalso {
     fn enviar(&self, url: &str, corpo: &[u8], hora: i64, assinatura: &str) -> anyhow::Result<(u16, String)> {
+        if url.ends_with("/produtor") {
+            self.produtores.lock().unwrap().push(serde_json::from_slice(corpo).unwrap());
+            return Ok((201, json!({ "resultado": "criado" }).to_string()));
+        }
+        if url.ends_with("/fazendas") {
+            self.recebidos.lock().unwrap().push((serde_json::from_slice(corpo).unwrap(), hora, assinatura.to_string()));
+            let fazendas = json!({ "produtor": { "nome": "PRODUTOR TESTE" }, "fazendas": [{ "id": 7, "nome": "Faz Boa Vista", "ie": "109876547",
+                "endereco": { "xLgr": "GO 164", "nro": "SN", "xCpl": "KM 5", "xBairro": "ZONA RURAL", "CEP": "76520000", "cMun": "5208707", "xMun": "GOIANIA", "UF": "GO" } }] });
+            return Ok((200, fazendas.to_string()));
+        }
         assert_eq!(url, "http://127.0.0.1:3333/api/integracao/emissor");
         let status = { let mut r = self.respostas.lock().unwrap(); if r.is_empty() { 201 } else { r.remove(0) } };
         if status == 0 {
@@ -1139,4 +1150,59 @@ async fn recusa_definitiva_do_campo_certo_nao_repete() {
     assert_eq!(emissor_nfe::integracao::processar(&api.ctx).unwrap(), 0);
     let det = api.get(&format!("/notas/{id}")).await.json();
     assert_eq!(det["campoCerto"][0]["situacao"], json!("ignorada"), "{det}");
+}
+
+
+#[tokio::test]
+async fn fazendas_do_campo_certo_para_o_emitente() {
+    // Sem a integração: a tela não mostra a escolha de fazenda.
+    let api = Api::nova().await;
+    assert_eq!(api.get("/campo-certo/fazendas").await.json()["ligada"], json!(false));
+
+    let falso = CampoCertoFalso::default();
+    let integ = emissor_nfe::integracao::Integracao::nova("http://127.0.0.1:3333", SEGREDO_TESTE, Box::new(falso.clone())).unwrap();
+    let api = Api::vazia_com(Some(integ));
+    api.post("/auth/configurar", json!({ "login": "admin", "nome": "Administrador", "senha": "senha-do-admin" })).await;
+    api.post("/produtores", envio_pfx(PFX_CPF, "teste")).await;
+    let r = api.get("/campo-certo/fazendas").await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.texto());
+    let v = r.json();
+    assert_eq!(v["ligada"], json!(true));
+    assert_eq!(v["fazendas"][0]["ie"], json!("109876547"));
+    assert_eq!(v["fazendas"][0]["endereco"]["cMun"], json!("5208707"));
+    // O pedido leva o CPF do produtor selecionado e vai assinado.
+    let (pedido, hora, assinatura) = falso.recebidos.lock().unwrap()[0].clone();
+    assert_eq!(pedido["documento"], json!("52998224725"));
+    assert_eq!(pedido["conta"], Value::Null, "usuário local, sem conta do SaintSSO");
+    assert_eq!(assinatura, emissor_nfe::integracao::assinar(SEGREDO_TESTE, hora, &serde_json::to_vec(&pedido).unwrap()));
+}
+
+
+#[tokio::test]
+async fn produtor_cadastrado_no_emissor_vai_para_o_campo_certo() {
+    let falso = CampoCertoFalso::default();
+    let integ = emissor_nfe::integracao::Integracao::nova("http://127.0.0.1:3333", SEGREDO_TESTE, Box::new(falso.clone())).unwrap();
+    let api = Api::vazia_com(Some(integ));
+    api.post("/auth/configurar", json!({ "login": "admin", "nome": "Administrador", "senha": "senha-do-admin" })).await;
+    api.post("/produtores", envio_pfx(PFX_CNPJ, "teste")).await; // CNPJ: não vai
+    api.post("/produtores", envio_pfx(PFX_CPF, "teste")).await; // CPF: vai na hora
+    emissor_nfe::integracao::processar(&api.ctx).unwrap();
+    let enviados = falso.produtores.lock().unwrap().clone();
+    assert_eq!(enviados.len(), 1, "{enviados:?}");
+    assert_eq!(enviados[0]["documento"], json!("52998224725"));
+    assert_eq!(enviados[0]["nome"], json!("PRODUTOR TESTE"), "sem emitente salvo, vai o titular do certificado");
+    assert_eq!(enviados[0]["conta"], Value::Null);
+
+    // Salvar o emitente padrão manda de novo, com o nome e o endereço dele.
+    let id = id_do_produtor(&api).await;
+    let emit = json!({ "xNome": "JOAO PRODUTOR", "IE": "109876547", "CRT": "3", "ender": { "xLgr": "FAZENDA BOA VISTA", "nro": "SN", "xBairro": "ZONA RURAL", "CEP": "76530000", "cMun": "5208707", "xMun": "GOIANIA", "UF": "GO" } });
+    assert_eq!(api.chamar("PUT", &format!("/produtores/{id}/emitente"), Some(emit)).await.status, StatusCode::OK);
+    emissor_nfe::integracao::processar(&api.ctx).unwrap();
+    let enviados = falso.produtores.lock().unwrap().clone();
+    assert_eq!(enviados.len(), 2);
+    assert_eq!(enviados[1]["nome"], json!("JOAO PRODUTOR"));
+    assert_eq!(enviados[1]["endereco"]["xLgr"], json!("FAZENDA BOA VISTA"));
+    // Entregue: não repete.
+    emissor_nfe::integracao::processar(&api.ctx).unwrap();
+    assert_eq!(falso.produtores.lock().unwrap().len(), 2);
 }

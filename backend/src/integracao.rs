@@ -33,6 +33,10 @@ pub trait Envio: Send + Sync {
 
 pub struct Integracao {
     pub url: String,
+    /// Fazendas do produtor no Campo Certo (IE e endereço do emitente).
+    pub url_fazendas: String,
+    /// Cadastro do produtor no Campo Certo.
+    pub url_produtor: String,
     segredo: String,
     envio: Box<dyn Envio>,
 }
@@ -49,7 +53,13 @@ impl Integracao {
         if segredo.len() < 32 {
             bail!("INTEGRACAO_EMISSOR_SEGREDO precisa ter pelo menos 32 caracteres (o mesmo no Campo Certo).");
         }
-        Ok(Integracao { url: format!("{base}/api/integracao/emissor"), segredo: segredo.to_string(), envio })
+        Ok(Integracao {
+            url: format!("{base}/api/integracao/emissor"),
+            url_fazendas: format!("{base}/api/integracao/emissor/fazendas"),
+            url_produtor: format!("{base}/api/integracao/emissor/produtor"),
+            segredo: segredo.to_string(),
+            envio,
+        })
     }
 }
 
@@ -127,12 +137,75 @@ fn mensagem(corpo: &str) -> String {
         .unwrap_or_else(|| corpo.chars().take(200).collect())
 }
 
-/// Uma rodada: envia o que está na vez. Devolve quantos foram entregues.
+/// Coloca o produtor na fila do Campo Certo (ao cadastrar e ao salvar o emitente padrão).
+/// Erro aqui nunca atrapalha o cadastro.
+pub fn enfileirar_produtor(ctx: &Contexto, produtor_id: i64) {
+    if let Err(e) = ctx.repo().enfileirar_produtor_integracao(produtor_id) {
+        eprintln!("[campo certo] não foi possível pôr o produtor {produtor_id} na fila: {e:#}");
+    }
+}
+
+/// Pedido do produtor: nome e endereço do emitente padrão (ou o titular do certificado).
+fn pedido_produtor(p: &crate::db::ProdutorIntegracao) -> Value {
+    let emitente: Value = p.emitente_json.as_deref().and_then(|t| serde_json::from_str(t).ok()).unwrap_or(Value::Null);
+    let nome = emitente["xNome"].as_str().map(str::trim).filter(|n| !n.is_empty()).unwrap_or(&p.titular).to_string();
+    json!({ "conta": p.conta, "documento": p.documento, "nome": nome, "endereco": emitente.get("ender").cloned().unwrap_or(Value::Null) })
+}
+
+/// Envia um pedido; devolve Ok(Some(resultado)) se entregue, Ok(None) se recusado de vez (422),
+/// Err(motivo) para tentar de novo depois.
+fn entregar(integ: &Integracao, url: &str, corpo: &[u8]) -> Result<Option<String>, String> {
+    let hora = agora();
+    match integ.envio.enviar(url, corpo, hora, &assinar(&integ.segredo, hora, corpo)) {
+        Ok((s, texto)) if (200..300).contains(&s) => Ok(Some(mensagem(&texto))),
+        Ok((422, texto)) => {
+            eprintln!("[campo certo] recusado: {}", mensagem(&texto));
+            Ok(None)
+        }
+        Ok((s, texto)) => Err(format!("HTTP {s}: {}", mensagem(&texto))),
+        Err(e) => Err(format!("sem resposta: {e}")),
+    }
+}
+
+/// Fazendas do produtor no Campo Certo, para preencher a IE e o endereço do emitente.
+/// `{ "ligada": false }` sem a integração; `{ "ligada": true, "produtor", "fazendas": [...] }` com ela.
+pub fn fazendas(ctx: &Contexto, produtor_id: i64) -> Result<Value> {
+    let Some(integ) = &ctx.integracao else { return Ok(json!({ "ligada": false, "fazendas": [] })) };
+    let (documento, conta) = ctx.repo().documento_e_conta(produtor_id)?;
+    let corpo = serde_json::to_vec(&json!({ "documento": documento, "conta": conta }))?;
+    let hora = agora();
+    let assinatura = assinar(&integ.segredo, hora, &corpo);
+    let (status, texto) = integ
+        .envio
+        .enviar(&integ.url_fazendas, &corpo, hora, &assinatura)
+        .map_err(|e| crate::emissao::negocio(format!("O Campo Certo não respondeu: {e}")))?;
+    if !(200..300).contains(&status) {
+        return Err(crate::emissao::negocio(format!("O Campo Certo recusou a consulta das fazendas ({status}): {}", mensagem(&texto))));
+    }
+    let mut v: Value = serde_json::from_str(&texto)?;
+    v["ligada"] = json!(true);
+    Ok(v)
+}
+
+/// Uma rodada: envia o que está na vez (produtores e depois notas). Devolve quantas NOTAS foram entregues.
 /// O banco nunca fica preso durante o envio (só ao ler a fila e ao gravar o resultado).
 pub fn processar(ctx: &Contexto) -> Result<usize> {
     let Some(integ) = &ctx.integracao else { return Ok(0) };
-    let itens = ctx.repo().integracao_pendentes(agora(), LOTE)?;
     let mut entregues = 0;
+    // Produtores primeiro: a nota encontra o produtor já cadastrado no Campo Certo.
+    // A lista é lida antes do laço: o banco não pode ficar preso durante os envios.
+    let produtores = ctx.repo().produtores_pendentes_integracao(agora(), LOTE)?;
+    for p in produtores {
+        let corpo = serde_json::to_vec(&pedido_produtor(&p))?;
+        let resposta = entregar(integ, &integ.url_produtor, &corpo);
+        let repo = ctx.repo();
+        match resposta {
+            Ok(Some(r)) => repo.produtor_integracao_concluido(p.id, "enviado", &r)?,
+            Ok(None) => repo.produtor_integracao_concluido(p.id, "ignorado", "recusado pelo Campo Certo")?,
+            Err(motivo) => repo.produtor_integracao_reagendar(p.id, agora() + espera(p.tentativas), &motivo)?,
+        }
+    }
+    let itens = ctx.repo().integracao_pendentes(agora(), LOTE)?;
     for item in itens {
         if item.tipo == "nota" && item.xml_proc.is_none() {
             ctx.repo().integracao_concluida(item.id, "ignorada", "nota sem XML autorizado")?;

@@ -8,7 +8,8 @@ const formatarDoc = (d) =>
   d.length === 11 ? d.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4')
     : d.length === 14 ? d.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, '$1.$2.$3/$4-$5') : d;
 
-export function Emitente({ nota, set, certificado, onSalvarPadrao, salvo }) {
+// fazendas: as do produtor no Campo Certo (cadastro principal), ou null sem a integração.
+export function Emitente({ nota, set, certificado, onSalvarPadrao, salvo, fazendas, onFazenda }) {
   const e = nota.emit;
   const s = (campo) => (v) => set(['emit', campo], v);
   const doc = digitos(e.CNPJ || e.CPF);
@@ -17,6 +18,17 @@ export function Emitente({ nota, set, certificado, onSalvarPadrao, salvo }) {
       id="emitente" numero="2" titulo="Emitente" descricao="Quem emite a nota. O documento vem do certificado digital."
       acoes={<button type="button" className="btn-texto" onClick={onSalvarPadrao}>{salvo ? '✓ Salvo como padrão' : 'Salvar como padrão'}</button>}
     >
+      {fazendas?.length > 0 && (
+        <div className="grade">
+          <Selecao
+            rotulo="Fazenda (Campo Certo)" largura="g"
+            valor={String(fazendas.find((f) => digitos(f.ie) === digitos(e.IE))?.id ?? '')}
+            onChange={(id) => { const f = fazendas.find((x) => String(x.id) === id); if (f) onFazenda(f); }}
+            opcoes={[['', 'Escolha a fazenda para preencher a IE e o endereço'], ...fazendas.map((f) => [String(f.id), `${f.nome} · IE ${f.ie}${f.endereco?.xMun ? ` · ${f.endereco.xMun}` : ''}`])]}
+            dica="Cadastro do Campo Certo. Para mudar a IE ou o endereço da fazenda, altere lá."
+          />
+        </div>
+      )}
       <div className="grade">
         <div className="campo l-p">
           <span className="rotulo">{doc.length === 14 ? 'CNPJ' : 'CPF'}</span>

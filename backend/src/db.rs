@@ -218,6 +218,20 @@ CREATE TABLE integracao_saida (
 CREATE INDEX ix_integracao_pendentes ON integracao_saida (situacao, proxima_tentativa);
 ";
 
+/// Migração 8: produtores do Emissor que vão para o Campo Certo (cadastro na hora, sem esperar a
+/// primeira nota). Os produtores com CPF que já existem entram na fila.
+const MIGRACAO_8: &str = "
+CREATE TABLE integracao_produtores (
+  produtor_id       INTEGER PRIMARY KEY REFERENCES produtores(id),
+  situacao          TEXT NOT NULL DEFAULT 'pendente',  -- pendente | enviado | ignorado
+  tentativas        INTEGER NOT NULL DEFAULT 0,
+  proxima_tentativa INTEGER NOT NULL DEFAULT 0,
+  resultado         TEXT,
+  atualizado_em     TEXT
+);
+INSERT INTO integracao_produtores (produtor_id) SELECT id FROM produtores WHERE length(documento) = 11 AND ativo = 1;
+";
+
 const MIGRACAO_5: &str = "
 CREATE TABLE numeracao_externa (
   produtor_id   INTEGER NOT NULL REFERENCES produtores(id) ON DELETE CASCADE,
@@ -236,6 +250,17 @@ pub const ESCALA_ESTOQUE: f64 = 10_000.0;
 /// Números "consumidos": notas que a SEFAZ registrou (autorizadas, canceladas, denegadas)
 /// e faixas inutilizadas. Número de nota rejeitada pode ser reutilizado.
 const STATUS_QUE_CONSOMEM: &str = "('autorizada', 'cancelada', 'denegada')";
+
+/// Produtor na fila para o Campo Certo.
+#[derive(Debug, Clone)]
+pub struct ProdutorIntegracao {
+    pub id: i64,
+    pub tentativas: i64,
+    pub documento: String,
+    pub titular: String,
+    pub emitente_json: Option<String>,
+    pub conta: Option<String>,
+}
 
 /// Envio pendente ao Campo Certo, com o que vai no pedido.
 #[derive(Debug, Clone)]
@@ -625,6 +650,9 @@ impl Repositorio {
         if versao < 7 {
             db.execute_batch(&format!("BEGIN; {MIGRACAO_7} PRAGMA user_version = 7; COMMIT;"))?;
         }
+        if versao < 8 {
+            db.execute_batch(&format!("BEGIN; {MIGRACAO_8} PRAGMA user_version = 8; COMMIT;"))?;
+        }
         Ok(Repositorio { db })
     }
 
@@ -886,6 +914,73 @@ impl Repositorio {
             params![id, proxima, resultado],
         )?;
         Ok(())
+    }
+
+    /// Põe (ou recoloca) o produtor na fila para o Campo Certo. Só produtor com CPF.
+    pub fn enfileirar_produtor_integracao(&self, produtor_id: i64) -> Result<()> {
+        self.db.execute(
+            "INSERT INTO integracao_produtores (produtor_id) SELECT id FROM produtores WHERE id = ?1 AND length(documento) = 11
+             ON CONFLICT (produtor_id) DO UPDATE SET situacao = 'pendente', tentativas = 0, proxima_tentativa = 0",
+            [produtor_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn produtores_pendentes_integracao(&self, agora: i64, limite: i64) -> Result<Vec<ProdutorIntegracao>> {
+        let mut st = self.db.prepare(
+            "SELECT p.id, i.tentativas, p.documento, p.titular, p.emitente_json, u.sso_sub
+             FROM integracao_produtores i JOIN produtores p ON p.id = i.produtor_id
+             LEFT JOIN usuarios u ON u.id = p.dono_id
+             WHERE i.situacao = 'pendente' AND i.proxima_tentativa <= ?1 AND p.ativo = 1
+             ORDER BY p.id LIMIT ?2",
+        )?;
+        let v = st
+            .query_map(params![agora, limite], |r| {
+                Ok(ProdutorIntegracao {
+                    id: r.get(0)?,
+                    tentativas: r.get(1)?,
+                    documento: r.get(2)?,
+                    titular: r.get(3)?,
+                    emitente_json: r.get(4)?,
+                    conta: r.get(5)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(v)
+    }
+
+    pub fn produtor_integracao_concluido(&self, produtor_id: i64, situacao: &str, resultado: &str) -> Result<()> {
+        self.db.execute(
+            "UPDATE integracao_produtores SET situacao = ?2, resultado = ?3, tentativas = tentativas + 1,
+               atualizado_em = datetime('now', 'localtime') WHERE produtor_id = ?1",
+            params![produtor_id, situacao, resultado],
+        )?;
+        Ok(())
+    }
+
+    pub fn produtor_integracao_reagendar(&self, produtor_id: i64, proxima: i64, resultado: &str) -> Result<()> {
+        self.db.execute(
+            "UPDATE integracao_produtores SET tentativas = tentativas + 1, proxima_tentativa = ?2, resultado = ?3,
+               atualizado_em = datetime('now', 'localtime') WHERE produtor_id = ?1",
+            params![produtor_id, proxima, resultado],
+        )?;
+        Ok(())
+    }
+
+    /// Situação do cadastro do produtor no Campo Certo (para a tela de produtores).
+    pub fn produtor_integracao(&self, produtor_id: i64) -> Result<Option<Value>> {
+        Ok(self
+            .linhas("SELECT situacao, resultado, atualizado_em FROM integracao_produtores WHERE produtor_id = ?", [produtor_id])?
+            .pop())
+    }
+
+    /// CPF/CNPJ do produtor e o `sub` do SaintSSO do dono dele (a conta = empresa no Campo Certo).
+    pub fn documento_e_conta(&self, produtor_id: i64) -> Result<(String, Option<String>)> {
+        Ok(self.db.query_row(
+            "SELECT p.documento, u.sso_sub FROM produtores p LEFT JOIN usuarios u ON u.id = p.dono_id WHERE p.id = ?",
+            [produtor_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?)
     }
 
     /// Situação do envio ao Campo Certo, por tipo, para mostrar na nota.
@@ -1363,7 +1458,8 @@ impl Repositorio {
         let mut v = self.linhas(
             "SELECT p.id, p.documento, p.titular, p.tipo, p.emissor_cert, p.valido_ate, p.dono_id, u.nome AS dono_nome,
                     p.emitente_json, p.criado_em, p.pagamento_vencimento,
-                    (SELECT COUNT(*) FROM notas n WHERE n.produtor_id = p.id) AS notas
+                    (SELECT COUNT(*) FROM notas n WHERE n.produtor_id = p.id) AS notas,
+                    (SELECT situacao FROM integracao_produtores i WHERE i.produtor_id = p.id) AS campo_certo
              FROM produtores p LEFT JOIN usuarios u ON u.id = p.dono_id
              WHERE p.ativo = 1 AND (?1 IS NULL OR p.dono_id = ?1)
              ORDER BY p.titular COLLATE NOCASE",

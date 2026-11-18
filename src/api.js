@@ -67,6 +67,7 @@ export const api = {
   renovarCertificado: (id, pfx, senha) => put(`/api/produtores/${id}/certificado`, { pfx, senha }),
   definirEmitente: (id, emitente) => put(`/api/produtores/${id}/emitente`, emitente),
   numeracao: (id) => chamar(`/api/produtores/${id}/numeracao`),
+  fazendasCampoCerto: () => chamar('/api/campo-certo/fazendas', {}, { silencioso: true }),
   definirNumeracao: (id, serie, ultimo) => put(`/api/produtores/${id}/numeracao`, { serie, ultimo }),
   removerProdutor: (id) => apagar(`/api/produtores/${id}`),
   selecionarProdutor: (id) => post(`/api/produtores/${id}/selecionar`, {}),

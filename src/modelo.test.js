@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   notaVazia, itemVazio, paraPayload, totaisNota, pendencias, avisos, centavos, itemDoProduto, produtoDoItem,
   cBenefValido, itensQuePedemGta, aplicarTipoNota, cfopDoTipo, notaDoPayload, destDoCliente, avisosEstoque, estoqueBaixo, serieAdequada, serieSugerida,
+  emitenteDaFazenda,
 } from './modelo.js';
 import { execFileSync } from 'node:child_process';
 
@@ -216,4 +217,18 @@ test('GTA: animal vivo em Goiás pede a guia; a guia vai no payload e não é co
   const soja = { ...notaCompleta(), guia: { tpGuia: '1', UFGuia: 'GO', serieGuia: '', nGuia: '99' } };
   assert.ok(pendencias(soja).includes('Guia de trânsito animal informada sem nenhum item de animal vivo'));
   assert.equal(paraPayload(notaCompleta()).agropecuario, undefined);
+});
+
+test('emitente a partir da fazenda do Campo Certo: IE e endereço, sem apagar o que a fazenda não tem', () => {
+  const emit = { ...notaVazia().emit, xNome: 'PRODUTOR TESTE', CRT: '3', IE: '', ender: { ...notaVazia().emit.ender, fone: '6233334444' } };
+  const fazenda = { id: 7, nome: 'Faz Boa Vista', ie: '10.987.654-7', endereco: { xLgr: 'GO 164', nro: '', xCpl: 'km 5', xBairro: 'Zona Rural', CEP: '76.520-000', cMun: '5208707', xMun: 'Goiania', UF: 'go' } };
+  const e = emitenteDaFazenda(emit, fazenda);
+  assert.equal(e.IE, '109876547');
+  assert.deepEqual(e.ender, { ...emit.ender, xLgr: 'GO 164', nro: 'SN', xCpl: 'KM 5', xBairro: 'ZONA RURAL', CEP: '76520000', cMun: '5208707', xMun: 'GOIANIA', UF: 'GO', fone: '6233334444' });
+  assert.equal(e.xNome, 'PRODUTOR TESTE');
+  assert.equal(e.CRT, '3');
+  // Fazenda sem município cadastrado: mantém o que o emitente já tinha.
+  const semCidade = emitenteDaFazenda(e, { ie: '111', endereco: { xLgr: 'OUTRA' } });
+  assert.equal(semCidade.ender.cMun, '5208707');
+  assert.equal(semCidade.ender.xLgr, 'OUTRA');
 });

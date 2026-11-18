@@ -22,6 +22,28 @@ export function moeda(c) {
 // ---------- estado inicial ----------
 export const enderecoVazio = () => ({ CEP: '', xLgr: '', nro: '', xCpl: '', xBairro: '', cMun: '', xMun: '', UF: 'GO', fone: '' });
 
+// Emitente a partir da fazenda do Campo Certo (cadastro principal): IE e endereço. Nome, regime e
+// telefone continuam os do emitente; campos que a fazenda não tem não apagam o que já estava.
+export function emitenteDaFazenda(emit, fazenda) {
+  const f = fazenda.endereco ?? {};
+  const ou = (novo, atual) => (String(novo ?? '').trim() ? String(novo).trim().toUpperCase() : atual);
+  return {
+    ...emit,
+    IE: digitos(fazenda.ie) || emit.IE,
+    ender: {
+      ...emit.ender,
+      xLgr: ou(f.xLgr, emit.ender.xLgr),
+      nro: ou(f.nro, emit.ender.nro) || 'SN',
+      xCpl: ou(f.xCpl, emit.ender.xCpl),
+      xBairro: ou(f.xBairro, emit.ender.xBairro),
+      CEP: digitos(f.CEP) || emit.ender.CEP,
+      cMun: digitos(f.cMun) || emit.ender.cMun,
+      xMun: ou(f.xMun, emit.ender.xMun),
+      UF: ou(f.UF, emit.ender.UF),
+    },
+  };
+}
+
 export const itemVazio = () => ({
   cProd: '', xProd: '', NCM: '', CFOP: '5101', uCom: 'UN', qCom: '1', vUnCom: '', vDesc: '', vFrete: '', infAdProd: '', cBenef: '',
   icms: { orig: '0', CST: '51', pICMS: '' },

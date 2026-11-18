@@ -219,7 +219,16 @@ fn produtor_acessivel(ctx: &Contexto, u: &Usuario, id: i64) -> Result<Produtor> 
 }
 
 pub fn listar_produtores(ctx: &Contexto, u: &Usuario) -> Result<Vec<Value>> {
-    ctx.repo().listar_produtores(if u.admin { None } else { Some(u.id) })
+    let mut lista = ctx.repo().listar_produtores(if u.admin { None } else { Some(u.id) })?;
+    // Sem a integração ligada, a situação no Campo Certo não quer dizer nada: não mostra.
+    if ctx.integracao.is_none() {
+        for p in &mut lista {
+            if let Some(m) = p.as_object_mut() {
+                m.remove("campo_certo");
+            }
+        }
+    }
+    Ok(lista)
 }
 
 /// Lê o .pfx enviado (base64) e confere senha, documento e validade.
@@ -305,6 +314,8 @@ pub fn adicionar_produtor(ctx: &Contexto, s: &SessaoAtual, dados: &Value) -> Res
         }
     };
     ctx.cache_certificados().insert(id, Arc::new(cert.clone()));
+    // Aparece no Campo Certo na hora (pacote Pro), sem esperar a primeira nota.
+    crate::integracao::enfileirar_produtor(ctx, id);
     Ok(resumo(&cert, id))
 }
 
@@ -355,6 +366,8 @@ pub fn definir_emitente(ctx: &Contexto, s: &SessaoAtual, id: i64, dados: &Value)
         return Err(negocio("Dados do emitente grandes demais."));
     }
     ctx.repo().definir_emitente(id, &texto)?;
+    // O endereço do emitente completa o cadastro do Campo Certo (só o que estiver vazio lá).
+    crate::integracao::enfileirar_produtor(ctx, id);
     Ok(serde_json::from_str(&texto)?)
 }
 

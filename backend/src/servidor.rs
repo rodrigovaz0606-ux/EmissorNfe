@@ -425,6 +425,11 @@ async fn definir_emitente(State(ctx): State<Ctx>, Logado(s): Logado, Path(id): P
     Ok(json_ok(bloqueante(&ctx, move |c| contas::definir_emitente(c, &s, id, &d)).await?))
 }
 
+/// Fazendas do produtor selecionado no Campo Certo (IE e endereço para o emitente).
+async fn fazendas_campo_certo(State(ctx): State<Ctx>, ComProdutor(a): ComProdutor) -> Result<Response, ErroApi> {
+    Ok(json_ok(bloqueante(&ctx, move |c| crate::integracao::fazendas(c, a.id)).await?))
+}
+
 async fn numeracao_produtor(State(ctx): State<Ctx>, Logado(s): Logado, Path(id): Path<String>) -> Result<Response, ErroApi> {
     let id = id_de(&id);
     Ok(json_ok(bloqueante(&ctx, move |c| contas::numeracao(c, &s, id)).await?))
@@ -748,6 +753,7 @@ pub fn criar_app(ctx: Ctx, dist: Option<PathBuf>) -> Router {
         .route("/produtores/{id}/certificado", put(renovar_certificado))
         .route("/produtores/{id}/emitente", put(definir_emitente))
         .route("/produtores/{id}/numeracao", get(numeracao_produtor).put(definir_numeracao))
+        .route("/campo-certo/fazendas", get(fazendas_campo_certo))
         .route("/produtores/{id}/selecionar", post(selecionar_produtor))
         // administração
         .route("/admin/usuarios", get(usuarios).post(criar_usuario))
